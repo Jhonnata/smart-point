@@ -1,0 +1,5 @@
+{
+  "name": "Calculadora de Horas Extras e Banco de Horas",
+  "description": "Extraia dados do seu cartão de ponto via câmera ou imagem para calcular horas extras, banco de horas e valores a receber.",
+  "requestFramePermissions": ["camera"]
+}
