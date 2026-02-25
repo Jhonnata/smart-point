@@ -279,4 +279,4 @@ Observacao:
   - `aiProvider = gemini`
   - `geminiModel = gemini-3-flash-preview`
   - `cycleStartDay = 15`
-  - `compDays = 1,2,3,4`
+  - `compDays = 1,2,3,4` 
