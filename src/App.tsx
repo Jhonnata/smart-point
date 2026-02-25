@@ -5,6 +5,8 @@ import {
   FileText, 
   PlusCircle,
   LogOut,
+  LogIn,
+  UserPlus,
   ChevronRight,
   Menu,
   X,
@@ -27,6 +29,12 @@ import { ptBR } from 'date-fns/locale';
 
 type View = 'dashboard' | 'resumo' | 'holerith' | 'card' | 'card-list' | 'upload' | 'settings';
 type CardSaveMode = 'merge' | 'replace';
+type AuthMode = 'login' | 'register';
+type AuthUser = {
+  id: number;
+  username: string;
+  displayName: string;
+};
 
 export default function App() {
   const [view, setView] = useState<View>(() => {
@@ -46,6 +54,15 @@ export default function App() {
   const [uploadContext, setUploadContext] = useState<{ month: string, isOvertime: boolean } | null>(null);
   const [pendingCardSaveMode, setPendingCardSaveMode] = useState<CardSaveMode | null>(null);
   const [localProjectedByMonth, setLocalProjectedByMonth] = useState<Record<string, any>>({});
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<AuthMode>('login');
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [authForm, setAuthForm] = useState({
+    username: '',
+    password: '',
+    displayName: ''
+  });
 
   const normalizeMonthKey = React.useCallback((value: string): string => {
     const match = String(value || '').trim().match(/^(\d{4})-(\d{1,2})$/);
@@ -238,11 +255,6 @@ export default function App() {
   }, [selectedMonth, fetchReferenceByMonth, localProjectedByMonth, normalizeMonthKey]);
 
   useEffect(() => {
-    // Only fetch settings if they haven't been loaded yet
-    if (!settings) {
-      fetchData();
-    }
-    
     const handleHashChange = () => {
       const hash = window.location.hash.replace('#', '') as View;
       const validViews: View[] = ['dashboard', 'resumo', 'holerith', 'card', 'card-list', 'upload', 'settings'];
@@ -250,10 +262,51 @@ export default function App() {
         setView(hash);
       }
     };
-
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
-  }, [settings]);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const bootstrapAuth = async () => {
+      setAuthLoading(true);
+      try {
+        const res = await fetch('/api/auth/me');
+        if (!res.ok) {
+          if (!cancelled) setAuthUser(null);
+          return;
+        }
+        const data = await res.json();
+        if (!cancelled) {
+          setAuthUser(data?.user || null);
+        }
+      } catch (err) {
+        console.error('Error checking session:', err);
+        if (!cancelled) setAuthUser(null);
+      } finally {
+        if (!cancelled) setAuthLoading(false);
+      }
+    };
+    bootstrapAuth();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!authUser) {
+      setSettings(null);
+      setEntries([]);
+      setHoleriths([]);
+      setMonthCache({});
+      setMonthData(null);
+      setSelectedMonth('');
+      setIsLoading(false);
+      return;
+    }
+    if (!settings) {
+      fetchData();
+    }
+  }, [authUser, authLoading, settings]);
 
   useEffect(() => {
     setEntries(rebuildEntriesFromCache(monthCache, monthsFromHoleriths));
@@ -349,10 +402,70 @@ export default function App() {
     };
   }, [monthHoursEntries, monthHeEntries, settings, monthData]);
 
+  const submitAuth = async (mode: AuthMode) => {
+    const username = authForm.username.trim().toLowerCase();
+    const password = authForm.password;
+    const displayName = authForm.displayName.trim();
+    if (!username || !password) {
+      toast.error('Informe usuário e senha.');
+      return;
+    }
+    if (mode === 'register' && !displayName) {
+      toast.error('Informe o nome de exibição.');
+      return;
+    }
+
+    setAuthSubmitting(true);
+    try {
+      const res = await fetch(mode === 'login' ? '/api/auth/login' : '/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password, displayName })
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || 'Falha na autenticação.');
+      }
+
+      const user = data?.user as AuthUser | undefined;
+      if (!user) throw new Error('Sessão não retornada pelo servidor.');
+
+      setAuthUser(user);
+      setSettings(null);
+      setAuthForm((prev) => ({ ...prev, password: '' }));
+      toast.success(mode === 'login' ? 'Login realizado.' : 'Conta criada com sucesso.');
+    } catch (err: any) {
+      toast.error(err?.message || 'Erro na autenticação.');
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const logout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+    } catch (err) {
+      console.error('Error during logout:', err);
+    } finally {
+      setAuthUser(null);
+      setSettings(null);
+      setAuthForm((prev) => ({ ...prev, password: '' }));
+      setAuthMode('login');
+    }
+  };
+
   const fetchData = async () => {
     setIsLoading(true);
     try {
       const sRes = await fetch('/api/settings');
+      if (sRes.status === 401) {
+        setAuthUser(null);
+        return;
+      }
+      if (!sRes.ok) {
+        throw new Error(`Erro ao carregar configurações (${sRes.status})`);
+      }
       const sData = await sRes.json();
       setSettings(sData);
       await refreshHolerithsAndCache();
@@ -364,14 +477,26 @@ export default function App() {
   };
 
   const saveSettings = async (newSettings: Settings) => {
-    await fetch('/api/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newSettings)
-    });
-    setSettings(newSettings);
-    toast.success("Configurações salvas!");
-    setView('dashboard');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newSettings)
+      });
+      if (res.status === 401) {
+        setAuthUser(null);
+        return;
+      }
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData?.error || `Erro ao salvar configurações (${res.status})`);
+      }
+      setSettings(newSettings);
+      toast.success("Configurações salvas!");
+      setView('dashboard');
+    } catch (err: any) {
+      toast.error(err?.message || 'Falha ao salvar configurações.');
+    }
   };
 
   const saveCard = async (payload: {
@@ -576,10 +701,98 @@ export default function App() {
     });
   };
 
-  if (isLoading) {
+  if (authLoading || (authUser && isLoading)) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-zinc-50">
         <div className="w-12 h-12 border-4 border-zinc-200 border-t-zinc-900 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!authUser) {
+    return (
+      <div className="min-h-screen bg-[#F8F9FA] flex items-center justify-center p-4">
+        <div className="w-full max-w-md bg-white border border-zinc-100 rounded-3xl p-8 shadow-sm">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center">
+              <PlusCircle className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="font-black text-2xl tracking-tighter text-zinc-900">PontoSmart</h1>
+              <p className="text-xs text-zinc-500">Acesso por usuário</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 bg-zinc-100 rounded-xl p-1 mb-5">
+            <button
+              type="button"
+              onClick={() => setAuthMode('login')}
+              className={cn(
+                'flex-1 rounded-lg py-2 text-sm font-bold transition',
+                authMode === 'login' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'
+              )}
+            >
+              Entrar
+            </button>
+            <button
+              type="button"
+              onClick={() => setAuthMode('register')}
+              className={cn(
+                'flex-1 rounded-lg py-2 text-sm font-bold transition',
+                authMode === 'register' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'
+              )}
+            >
+              Criar conta
+            </button>
+          </div>
+
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitAuth(authMode);
+            }}
+          >
+            {authMode === 'register' && (
+              <input
+                value={authForm.displayName}
+                onChange={(e) => setAuthForm((prev) => ({ ...prev, displayName: e.target.value }))}
+                className="w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                placeholder="Nome de exibição"
+              />
+            )}
+            <input
+              value={authForm.username}
+              onChange={(e) => setAuthForm((prev) => ({ ...prev, username: e.target.value }))}
+              className="w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-zinc-900"
+              placeholder="Usuário"
+              autoComplete="username"
+            />
+            <input
+              type="password"
+              value={authForm.password}
+              onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))}
+              className="w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-zinc-900"
+              placeholder="Senha"
+              autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
+            />
+
+            <button
+              type="submit"
+              disabled={authSubmitting}
+              className="w-full mt-2 rounded-xl bg-zinc-900 text-white py-3 font-bold disabled:opacity-60 flex items-center justify-center gap-2"
+            >
+              {authMode === 'login' ? <LogIn className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
+              {authSubmitting ? 'Aguarde...' : (authMode === 'login' ? 'Entrar' : 'Criar conta')}
+            </button>
+          </form>
+          {authMode === 'login' && (
+            <p className="mt-4 text-xs text-zinc-500">
+              Primeiro acesso: usuário <span className="font-bold">admin</span> e senha <span className="font-bold">admin123</span> (altere após entrar).
+            </p>
+          )}
+          <Toaster position="top-right" richColors />
+        </div>
       </div>
     );
   }
@@ -642,11 +855,25 @@ export default function App() {
         </nav>
 
         <div className="p-6 border-t border-zinc-50">
+          <div className="mb-3 px-2">
+            <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Usuário</div>
+            <div className="text-sm font-extrabold text-zinc-900 truncate">
+              {authUser.displayName || authUser.username}
+            </div>
+            <div className="text-[11px] text-zinc-500 truncate">@{authUser.username}</div>
+          </div>
+          <button
+            onClick={logout}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-all mb-2"
+          >
+            <LogOut className="w-5 h-5" />
+            Sair da Conta
+          </button>
           <button 
             onClick={clearData}
             className="w-full flex items-center gap-3 px-4 py-4 rounded-2xl font-bold text-red-400 hover:bg-red-50 hover:text-red-600 transition-all"
           >
-            <LogOut className="w-5 h-5" />
+            <X className="w-5 h-5" />
             Limpar Dados
           </button>
         </div>

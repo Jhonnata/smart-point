@@ -2,6 +2,7 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
+import crypto from "crypto";
 
 const db = new Database("ponto.db");
 
@@ -132,6 +133,22 @@ db.exec(`
     saturdayWorkEnd     TEXT DEFAULT '16:00'
   );
 
+  CREATE TABLE IF NOT EXISTS users (
+    id            INTEGER PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE,
+    displayName   TEXT,
+    passwordHash  TEXT NOT NULL,
+    createdAt     TEXT DEFAULT (datetime('now')),
+    updatedAt     TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS user_sessions (
+    token       TEXT PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expiresAt   TEXT NOT NULL,
+    createdAt   TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS banco_horas (
     id          INTEGER PRIMARY KEY,
     holerith_id INTEGER REFERENCES holeriths(id) ON DELETE CASCADE,
@@ -259,6 +276,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_entries_marcacao_date ON entries(marcacao_id, workDate);
   CREATE INDEX IF NOT EXISTS idx_settings_defaultEmployeeId ON settings(defaultEmployeeId);
   CREATE INDEX IF NOT EXISTS idx_settings_defaultCompanyId ON settings(defaultCompanyId);
+  CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+  CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
+  CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expiresAt);
   CREATE INDEX IF NOT EXISTS idx_simulator_plans_ref ON simulator_plans(reference);
   CREATE INDEX IF NOT EXISTS idx_simulator_plans_employee_ref ON simulator_plans(employee_id, reference);
 `);
@@ -268,6 +288,128 @@ db.prepare(`
   INSERT OR IGNORE INTO settings (id, baseSalary, monthlyHours, dailyJourney, weeklyLimit, nightCutoff, percent50, percent100, percentNight, aiProvider, geminiModel)
   VALUES (1, 2500, 220, 8, 3, '22:00', 50, 100, 25, 'gemini', 'gemini-3-flash-preview')
 `).run();
+
+const SESSION_COOKIE_NAME = "smart_point_session";
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 14; // 14 days
+
+const settingsColumns = (db.prepare("PRAGMA table_info(settings)").all() as any[])
+  .map((c: any) => c.name)
+  .filter((name: string) => name !== "id");
+
+function ensureSettingsForUser(userId: number) {
+  if (!Number.isInteger(userId) || userId <= 0) return;
+  const existing = db.prepare("SELECT id FROM settings WHERE id = ?").get(userId) as any;
+  if (existing?.id) return;
+  const columnList = settingsColumns.join(", ");
+  db.prepare(`
+    INSERT OR IGNORE INTO settings (id, ${columnList})
+    SELECT ?, ${columnList}
+    FROM settings
+    WHERE id = 1
+  `).run(userId);
+}
+
+function parseCookies(cookieHeader: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!cookieHeader) return out;
+  for (const part of cookieHeader.split(";")) {
+    const [rawKey, ...rest] = part.trim().split("=");
+    if (!rawKey) continue;
+    out[rawKey] = decodeURIComponent(rest.join("=") || "");
+  }
+  return out;
+}
+
+function hashPassword(password: string, salt?: string): string {
+  const safeSalt = salt || crypto.randomBytes(16).toString("hex");
+  const digest = crypto.scryptSync(password, safeSalt, 64).toString("hex");
+  return `${safeSalt}:${digest}`;
+}
+
+function verifyPassword(password: string, stored: string): boolean {
+  if (!stored || !stored.includes(":")) return false;
+  const [salt, expectedHash] = stored.split(":");
+  if (!salt || !expectedHash) return false;
+  const actualHash = crypto.scryptSync(password, salt, 64).toString("hex");
+  if (actualHash.length !== expectedHash.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(actualHash, "hex"), Buffer.from(expectedHash, "hex"));
+}
+
+function createSession(userId: number): string {
+  const token = crypto.randomBytes(32).toString("hex");
+  db.prepare(`
+    INSERT INTO user_sessions (token, user_id, expiresAt, createdAt)
+    VALUES (?, ?, datetime('now', '+14 days'), datetime('now'))
+  `).run(token, userId);
+  return token;
+}
+
+function setSessionCookie(res: any, token: string) {
+  const isProd = process.env.NODE_ENV === "production";
+  const secureFlag = isProd ? "; Secure" : "";
+  res.setHeader(
+    "Set-Cookie",
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_MAX_AGE_SECONDS}${secureFlag}`
+  );
+}
+
+function clearSessionCookie(res: any) {
+  const isProd = process.env.NODE_ENV === "production";
+  const secureFlag = isProd ? "; Secure" : "";
+  res.setHeader(
+    "Set-Cookie",
+    `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureFlag}`
+  );
+}
+
+function cleanupExpiredSessions() {
+  db.prepare("DELETE FROM user_sessions WHERE datetime(expiresAt) <= datetime('now')").run();
+}
+
+function getUserFromSessionToken(token: string | undefined) {
+  if (!token) return null;
+  cleanupExpiredSessions();
+  const row = db.prepare(`
+    SELECT u.id, u.username, u.displayName
+    FROM user_sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.token = ?
+      AND datetime(s.expiresAt) > datetime('now')
+    LIMIT 1
+  `).get(token) as any;
+  if (!row) return null;
+  ensureSettingsForUser(Number(row.id));
+  return {
+    id: Number(row.id),
+    username: String(row.username || ""),
+    displayName: row.displayName || ""
+  };
+}
+
+function getAuthUserFromRequest(req: any) {
+  const cookies = parseCookies(req.headers?.cookie);
+  const token = cookies[SESSION_COOKIE_NAME];
+  return getUserFromSessionToken(token);
+}
+
+function bootstrapDefaultUser() {
+  const countRow = db.prepare("SELECT COUNT(*) AS cnt FROM users").get() as any;
+  const count = Number(countRow?.cnt || 0);
+  if (count > 0) return;
+
+  const adminPassword = (process.env.DEFAULT_ADMIN_PASSWORD || "admin123").trim();
+  const passwordHash = hashPassword(adminPassword);
+  db.prepare(`
+    INSERT INTO users (username, displayName, passwordHash, createdAt, updatedAt)
+    VALUES (?, ?, ?, datetime('now'), datetime('now'))
+  `).run("admin", "Administrador", passwordHash);
+
+  const admin = db.prepare("SELECT id FROM users WHERE username = 'admin'").get() as any;
+  if (admin?.id) {
+    ensureSettingsForUser(Number(admin.id));
+  }
+  console.log("[AUTH] Default user created -> username: admin");
+}
 
 // Migration: Backfill companies and employees from settings
 try {
@@ -558,19 +700,128 @@ function migrateLegacyCycleCutoverData() {
 }
 
 migrateLegacyCycleCutoverData();
+bootstrapDefaultUser();
 
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: '50mb' }));
 
+  app.post("/api/auth/register", (req, res) => {
+    try {
+      const usernameRaw = String(req.body?.username || "").trim().toLowerCase();
+      const password = String(req.body?.password || "");
+      const displayName = String(req.body?.displayName || "").trim();
+
+      if (!/^[a-z0-9._-]{3,32}$/.test(usernameRaw)) {
+        return res.status(400).json({ error: "Usuario invalido. Use 3-32 caracteres: a-z, 0-9, ., _, -." });
+      }
+      if (password.length < 6) {
+        return res.status(400).json({ error: "Senha invalida. Minimo de 6 caracteres." });
+      }
+
+      const exists = db.prepare("SELECT id FROM users WHERE username = ?").get(usernameRaw) as any;
+      if (exists?.id) {
+        return res.status(409).json({ error: "Usuario ja existe." });
+      }
+
+      const passwordHash = hashPassword(password);
+      const info = db.prepare(`
+        INSERT INTO users (username, displayName, passwordHash, createdAt, updatedAt)
+        VALUES (?, ?, ?, datetime('now'), datetime('now'))
+      `).run(usernameRaw, displayName || usernameRaw, passwordHash);
+
+      const userId = Number(info.lastInsertRowid);
+      ensureSettingsForUser(userId);
+      const token = createSession(userId);
+      setSessionCookie(res, token);
+
+      res.json({
+        user: {
+          id: userId,
+          username: usernameRaw,
+          displayName: displayName || usernameRaw
+        }
+      });
+    } catch (err: any) {
+      console.error("Error in POST /api/auth/register:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/auth/login", (req, res) => {
+    try {
+      const usernameRaw = String(req.body?.username || "").trim().toLowerCase();
+      const password = String(req.body?.password || "");
+      if (!usernameRaw || !password) {
+        return res.status(400).json({ error: "Usuario e senha sao obrigatorios." });
+      }
+
+      const user = db.prepare("SELECT id, username, displayName, passwordHash FROM users WHERE username = ?").get(usernameRaw) as any;
+      if (!user?.id || !verifyPassword(password, String(user.passwordHash || ""))) {
+        return res.status(401).json({ error: "Credenciais invalidas." });
+      }
+
+      ensureSettingsForUser(Number(user.id));
+      const token = createSession(Number(user.id));
+      setSessionCookie(res, token);
+      res.json({
+        user: {
+          id: Number(user.id),
+          username: String(user.username || ""),
+          displayName: String(user.displayName || user.username || "")
+        }
+      });
+    } catch (err: any) {
+      console.error("Error in POST /api/auth/login:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/auth/me", (req, res) => {
+    const authUser = getAuthUserFromRequest(req);
+    if (!authUser) return res.status(401).json({ user: null });
+    return res.json({ user: authUser });
+  });
+
+  app.post("/api/auth/logout", (req, res) => {
+    try {
+      const cookies = parseCookies(req.headers?.cookie);
+      const token = cookies[SESSION_COOKIE_NAME];
+      if (token) {
+        db.prepare("DELETE FROM user_sessions WHERE token = ?").run(token);
+      }
+      clearSessionCookie(res);
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("Error in POST /api/auth/logout:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.use((req, res, next) => {
+    if (!req.path.startsWith("/api/")) return next();
+    if (req.path.startsWith("/api/auth/")) return next();
+    const authUser = getAuthUserFromRequest(req);
+    if (!authUser) {
+      return res.status(401).json({ error: "Nao autenticado." });
+    }
+    (req as any).authUser = authUser;
+    ensureSettingsForUser(Number(authUser.id));
+    next();
+  });
+
   // API Routes
   app.get("/api/settings", (req, res) => {
-    const settings = db.prepare("SELECT * FROM settings WHERE id = 1").get();
+    const userId = Number((req as any).authUser?.id || 0);
+    ensureSettingsForUser(userId);
+    const settings = db.prepare("SELECT * FROM settings WHERE id = ?").get(userId);
     console.log("[DEBUG] GET /api/settings ->", settings);
     res.json(settings);
   });
 
   app.post("/api/settings", (req, res) => {
+    const userId = Number((req as any).authUser?.id || 0);
+    ensureSettingsForUser(userId);
     const { 
       baseSalary, monthlyHours, dailyJourney, weeklyLimit, nightCutoff, 
       percent50, percent100, percent125, percentNight, 
@@ -589,7 +840,7 @@ async function startServer() {
         dependentes = ?, adiantamentoPercent = ?, adiantamentoIR = ?, saturdayCompensation = ?, cycleStartDay = ?, compDays = ?,
         workStart = ?, lunchStart = ?, lunchEnd = ?, workEnd = ?, saturdayWorkStart = ?, saturdayWorkEnd = ?,
         defaultEmployeeId = ?, defaultCompanyId = ?
-      WHERE id = 1
+      WHERE id = ?
     `).run(
       baseSalary, monthlyHours, dailyJourney, weeklyLimit, nightCutoff, 
       percent50, percent100, percent125, percentNight, 
@@ -598,13 +849,20 @@ async function startServer() {
       dependentes || 0, adiantamentoPercent || 0, adiantamentoIR || 0, saturdayCompensation ? 1 : 0, cycleStartDay || 15, compDays || '1,2,3,4',
       workStart || '12:00', lunchStart || '17:00', lunchEnd || '18:00', workEnd || '21:00',
       saturdayWorkStart || '12:00', saturdayWorkEnd || '16:00',
-      defaultEmployeeId || null, defaultCompanyId || null
+      defaultEmployeeId || null, defaultCompanyId || null,
+      userId
     );
     res.json({ success: true });
   });
 
   // GET /api/holeriths - lista todos os meses disponiveis
   app.get("/api/holeriths", (req, res) => {
+    const userId = Number((req as any).authUser?.id || 0);
+    const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
+    const employeeId = Number(sRow?.defaultEmployeeId || 0);
+    if (!employeeId) {
+      return res.json([]);
+    }
     const rows = db.prepare(`
       SELECT
         h.id, h.month, h.year,
@@ -616,32 +874,60 @@ async function startServer() {
         h.snapshot_companyCnpj AS companyCnpj,
         h.snapshot_cardNumber AS cardNumber
       FROM holeriths h
+      WHERE h.employee_id = ?
       ORDER BY h.year DESC, h.month DESC
-    `).all();
+    `).all(employeeId);
     console.log(`[DEBUG] GET /api/holeriths -> ${rows.length} rows`);
     res.json(rows);
   });
 
   app.get("/api/banco-horas", (req, res) => {
+    const userId = Number((req as any).authUser?.id || 0);
+    const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
+    const employeeId = Number(sRow?.defaultEmployeeId || 0);
+    if (!employeeId) {
+      return res.json([]);
+    }
     const data = db.prepare(`
       SELECT b.*, h.month, h.year 
       FROM banco_horas b
       LEFT JOIN holeriths h ON h.id = b.holerith_id
+      WHERE h.employee_id = ?
       ORDER BY b.date ASC
-    `).all();
+    `).all(employeeId);
     res.json(data);
   });
 
   app.post("/api/banco-horas", (req, res) => {
+    const userId = Number((req as any).authUser?.id || 0);
+    const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
+    const employeeId = Number(sRow?.defaultEmployeeId || 0);
+    if (!employeeId) {
+      return res.status(400).json({ error: "Funcionario padrao nao configurado." });
+    }
     const { holerith_id, date, minutes, type, description } = req.body;
+    const own = db.prepare("SELECT id FROM holeriths WHERE id = ? AND employee_id = ?").get(holerith_id, employeeId) as any;
+    if (!own?.id) {
+      return res.status(403).json({ error: "Holerith nao pertence ao usuario." });
+    }
     const info = db.prepare("INSERT INTO banco_horas (holerith_id, date, minutes, type, description) VALUES (?, ?, ?, ?, ?)")
       .run(holerith_id, date, minutes, type || 'extra', description);
     res.json({ id: info.lastInsertRowid });
   });
 
   app.delete("/api/banco-horas/:id", (req, res) => {
-    db.prepare("DELETE FROM banco_horas WHERE id = ?").run(req.params.id);
-    res.json({ success: true });
+    const userId = Number((req as any).authUser?.id || 0);
+    const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
+    const employeeId = Number(sRow?.defaultEmployeeId || 0);
+    if (!employeeId) {
+      return res.json({ success: true, count: 0 });
+    }
+    const result = db.prepare(`
+      DELETE FROM banco_horas
+      WHERE id = ?
+        AND holerith_id IN (SELECT id FROM holeriths WHERE employee_id = ?)
+    `).run(req.params.id, employeeId);
+    res.json({ success: true, count: result.changes });
   });
 
   app.get("/api/simulator-plan/:ref", (req, res) => {
@@ -651,12 +937,14 @@ async function startServer() {
         return res.status(400).json({ error: "Referencia invalida. Use MMYYYY." });
       }
 
-      const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = 1").get();
+      const userId = Number((req as any).authUser?.id || 0);
+      const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
       const employeeId = Number(sRow?.defaultEmployeeId || 0);
 
+      const planOwnerId = employeeId > 0 ? employeeId : -userId;
       const row = db.prepare(
         "SELECT payload, createdAt, updatedAt FROM simulator_plans WHERE employee_id = ? AND reference = ?"
-      ).get(employeeId, ref) as any;
+      ).get(planOwnerId, ref) as any;
 
       if (!row) {
         return res.json({ plan: null, updatedAt: null });
@@ -686,9 +974,11 @@ async function startServer() {
         return res.status(400).json({ error: "Referencia invalida. Use MMYYYY." });
       }
 
-      const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = 1").get();
+      const userId = Number((req as any).authUser?.id || 0);
+      const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
       const employeeId = Number(sRow?.defaultEmployeeId || 0);
       const payload = JSON.stringify(req.body || {});
+      const planOwnerId = employeeId > 0 ? employeeId : -userId;
 
       db.prepare(`
         INSERT INTO simulator_plans (employee_id, reference, payload, createdAt, updatedAt)
@@ -696,7 +986,7 @@ async function startServer() {
         ON CONFLICT(employee_id, reference) DO UPDATE SET
           payload = excluded.payload,
           updatedAt = datetime('now')
-      `).run(employeeId, ref, payload);
+      `).run(planOwnerId, ref, payload);
 
       res.json({ success: true });
     } catch (err: any) {
@@ -712,9 +1002,11 @@ async function startServer() {
         return res.status(400).json({ error: "Referencia invalida. Use MMYYYY." });
       }
 
-      const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = 1").get();
+      const userId = Number((req as any).authUser?.id || 0);
+      const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
       const employeeId = Number(sRow?.defaultEmployeeId || 0);
-      const result = db.prepare("DELETE FROM simulator_plans WHERE employee_id = ? AND reference = ?").run(employeeId, ref);
+      const planOwnerId = employeeId > 0 ? employeeId : -userId;
+      const result = db.prepare("DELETE FROM simulator_plans WHERE employee_id = ? AND reference = ?").run(planOwnerId, ref);
       res.json({ success: true, count: result.changes });
     } catch (err: any) {
       console.error("Error in DELETE /api/simulator-plan/:ref:", err);
@@ -740,7 +1032,9 @@ async function startServer() {
       hours?: any[]; he?: any[];
     };
 
-    const sRow: any = db.prepare("SELECT * FROM settings WHERE id = 1").get();
+    const userId = Number((req as any).authUser?.id || 0);
+    ensureSettingsForUser(userId);
+    const sRow: any = db.prepare("SELECT * FROM settings WHERE id = ?").get(userId);
     const journeyMinutes = Math.round(((sRow?.dailyJourney || 0) as number) * 60);
     const hasSatComp = !!sRow?.saturdayCompensation;
     const compDays = (sRow?.compDays || '1,2,3,4').split(',').map(Number);
@@ -793,10 +1087,10 @@ async function startServer() {
 
         // 4. Atualizar defaultEmployeeId / defaultCompanyId nas settings se necessário
         if (!sRow?.defaultEmployeeId && employeeId) {
-          db.prepare("UPDATE settings SET defaultEmployeeId = ? WHERE id = 1").run(employeeId);
+          db.prepare("UPDATE settings SET defaultEmployeeId = ? WHERE id = ?").run(employeeId, userId);
         }
         if (!sRow?.defaultCompanyId && companyId) {
-          db.prepare("UPDATE settings SET defaultCompanyId = ? WHERE id = 1").run(companyId);
+          db.prepare("UPDATE settings SET defaultCompanyId = ? WHERE id = ?").run(companyId, userId);
         }
 
         const saveCardType = (type: 'normal' | 'overtime', rows: any[], frontImg?: string, backImg?: string) => {
@@ -924,7 +1218,9 @@ async function startServer() {
     console.log(`[DEBUG] GET /api/referencia/${ref} -> month=${month}, year=${year}`);
 
     // Obter funcionário padrão (ou do holerith se existissem múltiplos, mas o app foca em um)
-    const settings = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = 1").get() as any;
+    const userId = Number((req as any).authUser?.id || 0);
+    ensureSettingsForUser(userId);
+    const settings = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId) as any;
     const employeeId = settings?.defaultEmployeeId;
 
     if (!employeeId) {
@@ -962,7 +1258,7 @@ async function startServer() {
     }
 
     // Garantir 31 dias preenchidos em cada cartão com base no ciclo de fechamento
-    const sRow: any = db.prepare("SELECT cycleStartDay FROM settings WHERE id = 1").get();
+    const sRow: any = db.prepare("SELECT cycleStartDay FROM settings WHERE id = ?").get(userId);
     const cycleStartDay = clampCycleStartDay(sRow?.cycleStartDay);
 
     const getCorrectDate = (d: number, refMonth: number, refYear: number, cycle: number) => {
@@ -1046,7 +1342,8 @@ async function startServer() {
 
       const month = parseInt(ref.substring(0, 2), 10);
       const year = parseInt(ref.substring(2), 10);
-      const settings = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = 1").get() as any;
+      const userId = Number((req as any).authUser?.id || 0);
+      const settings = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId) as any;
       const employeeId = settings?.defaultEmployeeId;
       if (!employeeId) return res.json({ success: true, count: 0 });
 
@@ -1090,13 +1387,25 @@ async function startServer() {
 
   app.delete("/api/referencias", (req, res) => {
     try {
+      const userId = Number((req as any).authUser?.id || 0);
+      const settings = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId) as any;
+      const employeeId = Number(settings?.defaultEmployeeId || 0);
+      if (!employeeId) {
+        return res.json({ success: true, count: 0 });
+      }
       const tx = db.transaction(() => {
-        const delE = db.prepare("DELETE FROM entries").run();
-        db.prepare("DELETE FROM marcacoes").run();
-        db.prepare("DELETE FROM banco_horas").run();
-        db.prepare("DELETE FROM simulator_plans").run();
-        db.prepare("DELETE FROM holeriths").run();
-        return delE.changes;
+        const holerithIds = db.prepare("SELECT id FROM holeriths WHERE employee_id = ?").all(employeeId) as Array<{ id: number }>;
+        const ids = holerithIds.map((row) => row.id);
+        let deletedEntries = 0;
+        for (const holId of ids) {
+          const delE = db.prepare("DELETE FROM entries WHERE marcacao_id IN (SELECT id FROM marcacoes WHERE holerith_id = ?)").run(holId);
+          deletedEntries += delE.changes;
+          db.prepare("DELETE FROM marcacoes WHERE holerith_id = ?").run(holId);
+          db.prepare("DELETE FROM banco_horas WHERE holerith_id = ?").run(holId);
+          db.prepare("DELETE FROM holeriths WHERE id = ?").run(holId);
+        }
+        db.prepare("DELETE FROM simulator_plans WHERE employee_id = ?").run(employeeId);
+        return deletedEntries;
       });
 
       const count = tx();
