@@ -4,6 +4,7 @@ import { Calculator, Save, WandSparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Settings, TimeEntry } from '../lib/calculations';
 import { resolveWorkDateByCompetenciaDay, timeToMinutes } from '../lib/calculations';
+import { apiFetch } from '../lib/api';
 import { formatCurrency, cn } from '../lib/utils';
 
 type RateMode = 'auto' | 'fixed';
@@ -260,7 +261,7 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
       if (!reference) return;
       setIsPlanLoading(true);
       try {
-        const res = await fetch(`/api/simulator-plan/${reference}`);
+        const res = await apiFetch(`/api/simulator-plan/${reference}`);
         if (!res.ok) return;
         const data = await res.json();
         const plan = (data?.plan || null) as SavedPlanPayload | null;
@@ -546,7 +547,7 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
     };
     setIsPlanSaving(true);
     try {
-      const res = await fetch(`/api/simulator-plan/${reference}`, {
+      const res = await apiFetch(`/api/simulator-plan/${reference}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

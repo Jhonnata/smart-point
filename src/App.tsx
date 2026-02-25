@@ -24,6 +24,7 @@ import DashboardView from './components/DashboardView';
 import type { Settings } from './lib/calculations';
 import type { TimeEntry } from './services/aiService';
 import { cn } from './lib/utils';
+import { apiFetch, isApiUnavailableInCurrentHost } from './lib/api';
 import { parseISO, isValid, format as formatDate } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
@@ -64,6 +65,7 @@ export default function App() {
     password: '',
     displayName: ''
   });
+  const apiUnavailable = React.useMemo(() => isApiUnavailableInCurrentHost(), []);
 
   const normalizeAuthUser = React.useCallback((raw: any): AuthUser | null => {
     if (!raw || typeof raw !== 'object') return null;
@@ -189,13 +191,13 @@ export default function App() {
 
   const fetchReferenceByMonth = React.useCallback(async (monthKey: string) => {
     const ref = refFromMonthKey(monthKey);
-    const res = await fetch(`/api/referencia/${ref}`);
+    const res = await apiFetch(`/api/referencia/${ref}`);
     if (!res.ok) return null;
     return await res.json();
   }, [refFromMonthKey]);
 
   const refreshHolerithsAndCache = React.useCallback(async (focusMonth?: string) => {
-    const holRes = await fetch('/api/holeriths');
+    const holRes = await apiFetch('/api/holeriths');
     const holData = holRes.ok ? await holRes.json() as any[] : [];
     const months = [...new Set((holData || []).map(monthKeyFromHolerith))].sort().reverse();
 
@@ -284,8 +286,15 @@ export default function App() {
     let cancelled = false;
     const bootstrapAuth = async () => {
       setAuthLoading(true);
+      if (apiUnavailable) {
+        if (!cancelled) {
+          setAuthUser(null);
+          setAuthLoading(false);
+        }
+        return;
+      }
       try {
-        const res = await fetch('/api/auth/me');
+        const res = await apiFetch('/api/auth/me');
         if (!res.ok) {
           if (!cancelled) setAuthUser(null);
           return;
@@ -303,7 +312,7 @@ export default function App() {
     };
     bootstrapAuth();
     return () => { cancelled = true; };
-  }, [normalizeAuthUser]);
+  }, [normalizeAuthUser, apiUnavailable]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -417,6 +426,10 @@ export default function App() {
   }, [monthHoursEntries, monthHeEntries, settings, monthData]);
 
   const submitAuth = async (mode: AuthMode) => {
+    if (apiUnavailable) {
+      toast.error('API nao configurada. Defina VITE_API_BASE_URL para o backend.');
+      return;
+    }
     const email = authForm.email.trim().toLowerCase();
     const password = authForm.password;
     const displayName = authForm.displayName.trim();
@@ -435,7 +448,7 @@ export default function App() {
 
     setAuthSubmitting(true);
     try {
-      const res = await fetch(mode === 'login' ? '/api/auth/login' : '/api/auth/register', {
+      const res = await apiFetch(mode === 'login' ? '/api/auth/login' : '/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password, displayName })
@@ -462,7 +475,7 @@ export default function App() {
 
   const logout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await apiFetch('/api/auth/logout', { method: 'POST' });
     } catch (err) {
       console.error('Error during logout:', err);
     } finally {
@@ -476,7 +489,7 @@ export default function App() {
   const fetchData = async () => {
     setIsLoading(true);
     try {
-      const sRes = await fetch('/api/settings');
+      const sRes = await apiFetch('/api/settings');
       if (sRes.status === 401) {
         setAuthUser(null);
         return;
@@ -496,7 +509,7 @@ export default function App() {
 
   const saveSettings = async (newSettings: Settings) => {
     try {
-      const res = await fetch('/api/settings', {
+      const res = await apiFetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newSettings)
@@ -529,7 +542,7 @@ export default function App() {
     const ref = `${payload.month}${payload.year}`;
     console.log(`Saving card via POST /api/referencia/${ref}`);
     try {
-      const res = await fetch(`/api/referencia/${ref}`, {
+      const res = await apiFetch(`/api/referencia/${ref}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -550,7 +563,7 @@ export default function App() {
         return next;
       });
 
-      const mRes = await fetch(`/api/referencia/${ref}`);
+      const mRes = await apiFetch(`/api/referencia/${ref}`);
       if (mRes.ok) {
         const mData = await mRes.json();
         setMonthData(mData);
@@ -626,7 +639,7 @@ export default function App() {
       const currentUpdateMode: CardSaveMode = pendingCardSaveMode || 'merge';
       if (currentUpdateMode === 'replace') {
         const ref = `${String(refMonth).padStart(2, '0')}${refYear}`;
-        const delRes = await fetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
+        const delRes = await apiFetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
         if (!delRes.ok && delRes.status !== 404) {
           const delErr = await delRes.json().catch(() => ({}));
           throw new Error(delErr.error || `Falha ao limpar competencia para substituicao (${delRes.status}).`);
@@ -654,7 +667,7 @@ export default function App() {
         onClick: async () => {
           try {
             console.log('Calling DELETE /api/referencias');
-            const res = await fetch('/api/referencias', { method: 'DELETE' });
+            const res = await apiFetch('/api/referencias', { method: 'DELETE' });
             if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
             const data = await res.json();
             console.log('Clear data response:', data);
@@ -691,7 +704,7 @@ export default function App() {
             const [year, mm] = month.split('-');
             const ref = `${mm}${year}`;
             console.log(`Calling DELETE /api/referencia/${ref}?type=all`);
-            const res = await fetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
+            const res = await apiFetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
             if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
             const data = await res.json();
             console.log('Delete response:', data);
@@ -797,13 +810,18 @@ export default function App() {
 
             <button
               type="submit"
-              disabled={authSubmitting}
+              disabled={authSubmitting || apiUnavailable}
               className="w-full mt-2 rounded-xl bg-zinc-900 text-white py-3 font-bold disabled:opacity-60 flex items-center justify-center gap-2"
             >
               {authMode === 'login' ? <LogIn className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
               {authSubmitting ? 'Aguarde...' : (authMode === 'login' ? 'Entrar' : 'Criar conta')}
             </button>
           </form>
+          {apiUnavailable && (
+            <p className="mt-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+              GitHub Pages publica apenas frontend estatico. Configure VITE_API_BASE_URL para um backend com as rotas /api.
+            </p>
+          )}
           <p className="mt-4 text-xs text-zinc-500">
             Não compartilhe sua senha. Para novo acesso, use a aba <span className="font-bold">Criar conta</span>.
           </p>
@@ -1151,7 +1169,7 @@ export default function App() {
 
                 if (updateMode === 'replace') {
                   const ref = `${mm}${year}`;
-                  const delRes = await fetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
+                  const delRes = await apiFetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
                   if (!delRes.ok && delRes.status !== 404) {
                     throw new Error(`Falha ao limpar competencia para substituicao (${delRes.status}).`);
                   }
@@ -1188,7 +1206,7 @@ export default function App() {
                   }
                   if (Object.keys(toFill).length > 0) {
                     const updatedSettings = { ...settings, ...toFill } as Settings;
-                    await fetch('/api/settings', {
+                    await apiFetch('/api/settings', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json' },
                       body: JSON.stringify(updatedSettings)
@@ -1236,7 +1254,7 @@ export default function App() {
                 }
                 
                 // Buscar dados existentes do mês para preservar o outro tipo de cartão
-                const existingRef = await fetch(`/api/referencia/${refMonth}${refYear}`);
+                const existingRef = await apiFetch(`/api/referencia/${refMonth}${refYear}`);
                 const existingMonthData = existingRef.ok ? await existingRef.json() : { hours: [], he: [], hasNormalCard: false, hasOvertimeCard: false };
                 const existingHours = existingMonthData.hasNormalCard ? (existingMonthData.hours || []) : [];
                 const existingHe = existingMonthData.hasOvertimeCard ? (existingMonthData.he || []) : [];
@@ -1359,7 +1377,6 @@ export default function App() {
     </div>
   );
 }
-
 
 
 

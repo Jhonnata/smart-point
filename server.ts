@@ -3,8 +3,14 @@ import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
 import crypto from "crypto";
+import fs from "fs";
 
-const db = new Database("ponto.db");
+const dbPath = process.env.SQLITE_PATH || "ponto.db";
+const dbDir = path.dirname(dbPath);
+if (dbDir && dbDir !== "." && !fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+const db = new Database(dbPath);
 
 // Initialize database
 db.exec(`PRAGMA foreign_keys = OFF;`);
@@ -422,6 +428,23 @@ function normalizeAuthIdentifier(raw: any): string {
   return String(raw || "").trim().toLowerCase();
 }
 
+function resolveAllowedOrigins(): Set<string> {
+  return new Set(
+    String(process.env.FRONTEND_ORIGIN || "")
+      .split(",")
+      .map((v) => v.trim())
+      .filter(Boolean)
+  );
+}
+
+function resolveCookieSameSite(): "Lax" | "Strict" | "None" {
+  const raw = String(process.env.SESSION_COOKIE_SAMESITE || "").trim().toLowerCase();
+  if (raw === "none") return "None";
+  if (raw === "strict") return "Strict";
+  if (raw === "lax") return "Lax";
+  return process.env.NODE_ENV === "production" ? "None" : "Lax";
+}
+
 function isValidEmail(email: string): boolean {
   if (!email || email.length > 254) return false;
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
@@ -439,18 +462,20 @@ function createSession(userId: number): string {
 function setSessionCookie(res: any, token: string) {
   const isProd = process.env.NODE_ENV === "production";
   const secureFlag = isProd ? "; Secure" : "";
+  const sameSite = resolveCookieSameSite();
   res.setHeader(
     "Set-Cookie",
-    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_MAX_AGE_SECONDS}${secureFlag}`
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${SESSION_MAX_AGE_SECONDS}${secureFlag}`
   );
 }
 
 function clearSessionCookie(res: any) {
   const isProd = process.env.NODE_ENV === "production";
   const secureFlag = isProd ? "; Secure" : "";
+  const sameSite = resolveCookieSameSite();
   res.setHeader(
     "Set-Cookie",
-    `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureFlag}`
+    `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=0${secureFlag}`
   );
 }
 
@@ -815,6 +840,28 @@ sanitizeSharedSettingsData();
 
 async function startServer() {
   const app = express();
+  const allowedOrigins = resolveAllowedOrigins();
+
+  app.use((req, res, next) => {
+    const origin = String(req.headers.origin || "");
+    const allowOrigin = origin && allowedOrigins.has(origin) ? origin : "";
+
+    if (allowOrigin) {
+      res.header("Access-Control-Allow-Origin", allowOrigin);
+      res.header("Vary", "Origin");
+      res.header("Access-Control-Allow-Credentials", "true");
+      res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+    }
+
+    if (req.method === "OPTIONS") {
+      if (allowOrigin) return res.sendStatus(204);
+      return res.sendStatus(403);
+    }
+
+    next();
+  });
+
   app.use(express.json({ limit: '50mb' }));
 
   app.post("/api/auth/register", (req, res) => {
@@ -1558,15 +1605,24 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.join(process.cwd(), "dist")));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(process.cwd(), "dist", "index.html"));
-    });
+    const distDir = path.join(process.cwd(), "dist");
+    const distIndex = path.join(distDir, "index.html");
+    if (fs.existsSync(distIndex)) {
+      app.use(express.static(distDir));
+      app.get("*", (req, res) => {
+        res.sendFile(distIndex);
+      });
+    } else {
+      app.get("/", (_req, res) => {
+        res.json({ status: "ok", service: "smart-point-api" });
+      });
+    }
   }
 
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3000);
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
+    console.log(`SQLite path: ${dbPath}`);
   });
 }
 
