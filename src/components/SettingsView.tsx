@@ -27,10 +27,11 @@ export default function SettingsView({ settings, onSave }: Props) {
   }, []);
   const [baseSalaryInput, setBaseSalaryInput] = useState<string>(formatBRL(settings.baseSalary || 0));
 
-  // Keep masked input in sync when settings change externally
+  // Keep local form and masked input in sync when settings change externally.
   useEffect(() => {
-    setBaseSalaryInput(formatBRL((localSettings.baseSalary as number) || 0));
-  }, [localSettings.baseSalary, formatBRL]);
+    setLocalSettings(settings);
+    setBaseSalaryInput(formatBRL((settings.baseSalary as number) || 0));
+  }, [settings, formatBRL]);
 
   const fetchGeminiModels = React.useCallback(async (key: string, silent = false) => {
     if (!key) {
@@ -95,9 +96,6 @@ export default function SettingsView({ settings, onSave }: Props) {
 
   const handleChange = (key: keyof Settings, value: string | number) => {
     setLocalSettings(prev => ({ ...prev, [key]: value }));
-    if (key === 'baseSalary' && typeof value === 'number') {
-      setBaseSalaryInput(formatBRL(value));
-    }
     
     // Auto-fetch models when provider or relevant API key changes
     if (key === 'aiProvider') {
@@ -165,7 +163,11 @@ export default function SettingsView({ settings, onSave }: Props) {
                     const num = parseBRL(text);
                     handleChange('baseSalary', num);
                   }}
-                  onBlur={() => setBaseSalaryInput(formatBRL((localSettings.baseSalary as number) || 0))}
+                  onBlur={() => {
+                    const num = parseBRL(baseSalaryInput);
+                    handleChange('baseSalary', num);
+                    setBaseSalaryInput(formatBRL(num));
+                  }}
                   className="w-full px-4 py-2 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-emerald-500 outline-none"
                   placeholder="R$ 0,00"
                 />

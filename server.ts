@@ -292,21 +292,104 @@ db.prepare(`
 const SESSION_COOKIE_NAME = "smart_point_session";
 const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 14; // 14 days
 
-const settingsColumns = (db.prepare("PRAGMA table_info(settings)").all() as any[])
-  .map((c: any) => c.name)
-  .filter((name: string) => name !== "id");
+const EMPLOYEE_SCOPE_SEPARATOR = "::";
+
+function buildScopedEmployeeCode(userId: number, rawCode: string): string {
+  return `u${userId}${EMPLOYEE_SCOPE_SEPARATOR}${String(rawCode || "").trim()}`;
+}
+
+function parseEmployeeScope(code: string): { scopedUserId: number | null; rawCode: string } {
+  const txt = String(code || "").trim();
+  const m = txt.match(/^u(\d+)::(.+)$/);
+  if (!m) return { scopedUserId: null, rawCode: txt };
+  return {
+    scopedUserId: Number(m[1]),
+    rawCode: m[2]
+  };
+}
+
+function isEmployeeCodeOwnedByUser(code: string, userId: number): boolean {
+  const { scopedUserId } = parseEmployeeScope(code);
+  if (scopedUserId === userId) return true;
+  // Compatibilidade: registros legados sem escopo pertencem ao usuÃ¡rio administrador (id=1).
+  if (scopedUserId === null && userId === 1) return true;
+  return false;
+}
+
+function clearLeakedSettingsReferences(userId: number) {
+  db.prepare(`
+    UPDATE settings
+    SET
+      defaultEmployeeId = NULL,
+      defaultCompanyId = NULL,
+      employeeName = NULL,
+      employeeCode = NULL,
+      role = NULL,
+      location = NULL,
+      companyName = NULL,
+      companyCnpj = NULL,
+      cardNumber = NULL
+    WHERE id = ?
+  `).run(userId);
+}
 
 function ensureSettingsForUser(userId: number) {
   if (!Number.isInteger(userId) || userId <= 0) return;
   const existing = db.prepare("SELECT id FROM settings WHERE id = ?").get(userId) as any;
   if (existing?.id) return;
-  const columnList = settingsColumns.join(", ");
   db.prepare(`
-    INSERT OR IGNORE INTO settings (id, ${columnList})
-    SELECT ?, ${columnList}
-    FROM settings
-    WHERE id = 1
+    INSERT OR IGNORE INTO settings (
+      id,
+      baseSalary, monthlyHours, dailyJourney, weeklyLimit, nightCutoff,
+      percent50, percent100, percentNight,
+      aiProvider, geminiModel,
+      dependentes, adiantamentoBruto, adiantamentoIR, adiantamentoPercent,
+      saturdayCompensation, cycleStartDay, compDays,
+      workStart, lunchStart, lunchEnd, workEnd, saturdayWorkStart, saturdayWorkEnd
+    )
+    VALUES (
+      ?,
+      2500, 220, 8, 3, '22:00',
+      50, 100, 25,
+      'gemini', 'gemini-3-flash-preview',
+      0, 0, 0, 40,
+      0, 15, '1,2,3,4',
+      '12:00', '17:00', '18:00', '21:00', '12:00', '16:00'
+    )
   `).run(userId);
+}
+
+function getSafeDefaultEmployeeId(userId: number): number {
+  ensureSettingsForUser(userId);
+  const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
+  const employeeId = Number(sRow?.defaultEmployeeId || 0);
+  if (!employeeId) return 0;
+
+  const employee: any = db.prepare("SELECT code FROM employees WHERE id = ?").get(employeeId);
+  if (!employee?.code || !isEmployeeCodeOwnedByUser(String(employee.code), userId)) {
+    clearLeakedSettingsReferences(userId);
+    return 0;
+  }
+  return employeeId;
+}
+
+function sanitizeSharedSettingsData() {
+  try {
+    const rows = db.prepare("SELECT id FROM settings ORDER BY id ASC").all() as Array<{ id: number }>;
+    let fixed = 0;
+    for (const row of rows) {
+      if (!row?.id) continue;
+      const before: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(Number(row.id));
+      const beforeEmpId = Number(before?.defaultEmployeeId || 0);
+      const afterEmpId = getSafeDefaultEmployeeId(Number(row.id));
+      if (beforeEmpId > 0 && afterEmpId === 0) fixed += 1;
+    }
+    if (fixed > 0) {
+      console.log(`[AUTH] Sanitized leaked user references in settings. affected=${fixed}`);
+    }
+  } catch (error) {
+    console.warn("[AUTH] Failed to sanitize shared settings data:", error);
+  }
 }
 
 function parseCookies(cookieHeader: string | undefined): Record<string, string> {
@@ -333,6 +416,15 @@ function verifyPassword(password: string, stored: string): boolean {
   const actualHash = crypto.scryptSync(password, salt, 64).toString("hex");
   if (actualHash.length !== expectedHash.length) return false;
   return crypto.timingSafeEqual(Buffer.from(actualHash, "hex"), Buffer.from(expectedHash, "hex"));
+}
+
+function normalizeAuthIdentifier(raw: any): string {
+  return String(raw || "").trim().toLowerCase();
+}
+
+function isValidEmail(email: string): boolean {
+  if (!email || email.length > 254) return false;
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 function createSession(userId: number): string {
@@ -379,9 +471,11 @@ function getUserFromSessionToken(token: string | undefined) {
   `).get(token) as any;
   if (!row) return null;
   ensureSettingsForUser(Number(row.id));
+  const email = String(row.username || "");
   return {
     id: Number(row.id),
-    username: String(row.username || ""),
+    username: email,
+    email,
     displayName: row.displayName || ""
   };
 }
@@ -393,22 +487,38 @@ function getAuthUserFromRequest(req: any) {
 }
 
 function bootstrapDefaultUser() {
-  const countRow = db.prepare("SELECT COUNT(*) AS cnt FROM users").get() as any;
-  const count = Number(countRow?.cnt || 0);
-  if (count > 0) return;
+  const adminUsername = "smart";
+  const adminDisplayName = "Administrador";
+  const adminPasswordHash = hashPassword("123smart");
 
-  const adminPassword = (process.env.DEFAULT_ADMIN_PASSWORD || "admin123").trim();
-  const passwordHash = hashPassword(adminPassword);
+  const currentAdmin = db.prepare("SELECT id FROM users WHERE username = ?").get(adminUsername) as any;
+  if (currentAdmin?.id) {
+    ensureSettingsForUser(Number(currentAdmin.id));
+    return;
+  }
+
+  const legacyAdmin = db.prepare("SELECT id FROM users WHERE username = 'admin'").get() as any;
+  if (legacyAdmin?.id) {
+    db.prepare(`
+      UPDATE users
+      SET username = ?, displayName = ?, passwordHash = ?, updatedAt = datetime('now')
+      WHERE id = ?
+    `).run(adminUsername, adminDisplayName, adminPasswordHash, Number(legacyAdmin.id));
+    ensureSettingsForUser(Number(legacyAdmin.id));
+    console.log("[AUTH] Legacy admin migrated -> username: smart");
+    return;
+  }
+
   db.prepare(`
     INSERT INTO users (username, displayName, passwordHash, createdAt, updatedAt)
     VALUES (?, ?, ?, datetime('now'), datetime('now'))
-  `).run("admin", "Administrador", passwordHash);
+  `).run(adminUsername, adminDisplayName, adminPasswordHash);
 
-  const admin = db.prepare("SELECT id FROM users WHERE username = 'admin'").get() as any;
-  if (admin?.id) {
-    ensureSettingsForUser(Number(admin.id));
+  const createdAdmin = db.prepare("SELECT id FROM users WHERE username = ?").get(adminUsername) as any;
+  if (createdAdmin?.id) {
+    ensureSettingsForUser(Number(createdAdmin.id));
   }
-  console.log("[AUTH] Default user created -> username: admin");
+  console.log("[AUTH] Default admin created -> username: smart");
 }
 
 // Migration: Backfill companies and employees from settings
@@ -442,7 +552,7 @@ try {
     db.prepare("UPDATE holeriths SET employee_id = ? WHERE employee_id IS NULL").run(empId);
   }
 } catch (e) {
-  // Ignora erro se a coluna já tiver NOT NULL ou dados corretos
+  // Ignora erro se a coluna jÃ¡ tiver NOT NULL ou dados corretos
 }
 
 function clampCycleStartDay(raw: any): number {
@@ -701,6 +811,7 @@ function migrateLegacyCycleCutoverData() {
 
 migrateLegacyCycleCutoverData();
 bootstrapDefaultUser();
+sanitizeSharedSettingsData();
 
 async function startServer() {
   const app = express();
@@ -708,27 +819,27 @@ async function startServer() {
 
   app.post("/api/auth/register", (req, res) => {
     try {
-      const usernameRaw = String(req.body?.username || "").trim().toLowerCase();
+      const emailRaw = normalizeAuthIdentifier(req.body?.email || req.body?.username);
       const password = String(req.body?.password || "");
       const displayName = String(req.body?.displayName || "").trim();
 
-      if (!/^[a-z0-9._-]{3,32}$/.test(usernameRaw)) {
-        return res.status(400).json({ error: "Usuario invalido. Use 3-32 caracteres: a-z, 0-9, ., _, -." });
+      if (!isValidEmail(emailRaw)) {
+        return res.status(400).json({ error: "Email invalido. Informe um e-mail valido." });
       }
       if (password.length < 6) {
         return res.status(400).json({ error: "Senha invalida. Minimo de 6 caracteres." });
       }
 
-      const exists = db.prepare("SELECT id FROM users WHERE username = ?").get(usernameRaw) as any;
+      const exists = db.prepare("SELECT id FROM users WHERE username = ?").get(emailRaw) as any;
       if (exists?.id) {
-        return res.status(409).json({ error: "Usuario ja existe." });
+        return res.status(409).json({ error: "Email ja cadastrado." });
       }
 
       const passwordHash = hashPassword(password);
       const info = db.prepare(`
         INSERT INTO users (username, displayName, passwordHash, createdAt, updatedAt)
         VALUES (?, ?, ?, datetime('now'), datetime('now'))
-      `).run(usernameRaw, displayName || usernameRaw, passwordHash);
+      `).run(emailRaw, displayName || emailRaw, passwordHash);
 
       const userId = Number(info.lastInsertRowid);
       ensureSettingsForUser(userId);
@@ -738,8 +849,9 @@ async function startServer() {
       res.json({
         user: {
           id: userId,
-          username: usernameRaw,
-          displayName: displayName || usernameRaw
+          username: emailRaw,
+          email: emailRaw,
+          displayName: displayName || emailRaw
         }
       });
     } catch (err: any) {
@@ -750,13 +862,13 @@ async function startServer() {
 
   app.post("/api/auth/login", (req, res) => {
     try {
-      const usernameRaw = String(req.body?.username || "").trim().toLowerCase();
+      const identifierRaw = normalizeAuthIdentifier(req.body?.email || req.body?.username);
       const password = String(req.body?.password || "");
-      if (!usernameRaw || !password) {
-        return res.status(400).json({ error: "Usuario e senha sao obrigatorios." });
+      if (!identifierRaw || !password) {
+        return res.status(400).json({ error: "Email e senha sao obrigatorios." });
       }
 
-      const user = db.prepare("SELECT id, username, displayName, passwordHash FROM users WHERE username = ?").get(usernameRaw) as any;
+      const user = db.prepare("SELECT id, username, displayName, passwordHash FROM users WHERE username = ?").get(identifierRaw) as any;
       if (!user?.id || !verifyPassword(password, String(user.passwordHash || ""))) {
         return res.status(401).json({ error: "Credenciais invalidas." });
       }
@@ -768,6 +880,7 @@ async function startServer() {
         user: {
           id: Number(user.id),
           username: String(user.username || ""),
+          email: String(user.username || ""),
           displayName: String(user.displayName || user.username || "")
         }
       });
@@ -814,6 +927,7 @@ async function startServer() {
   app.get("/api/settings", (req, res) => {
     const userId = Number((req as any).authUser?.id || 0);
     ensureSettingsForUser(userId);
+    getSafeDefaultEmployeeId(userId);
     const settings = db.prepare("SELECT * FROM settings WHERE id = ?").get(userId);
     console.log("[DEBUG] GET /api/settings ->", settings);
     res.json(settings);
@@ -831,6 +945,21 @@ async function startServer() {
       workStart, lunchStart, lunchEnd, workEnd, saturdayWorkStart, saturdayWorkEnd,
       defaultEmployeeId, defaultCompanyId
     } = req.body;
+    const current: any = db.prepare("SELECT defaultEmployeeId, defaultCompanyId FROM settings WHERE id = ?").get(userId);
+    const currentSafeEmployeeId = getSafeDefaultEmployeeId(userId) || null;
+
+    let safeDefaultEmployeeId = currentSafeEmployeeId;
+    if (Number.isInteger(Number(defaultEmployeeId)) && Number(defaultEmployeeId) > 0) {
+      const employee = db.prepare("SELECT code FROM employees WHERE id = ?").get(Number(defaultEmployeeId)) as any;
+      if (employee?.code && isEmployeeCodeOwnedByUser(String(employee.code), userId)) {
+        safeDefaultEmployeeId = Number(defaultEmployeeId);
+      }
+    }
+
+    const safeDefaultCompanyId = Number.isInteger(Number(defaultCompanyId)) && Number(defaultCompanyId) > 0
+      ? Number(defaultCompanyId)
+      : Number(current?.defaultCompanyId || 0) || null;
+
     db.prepare(`
       UPDATE settings SET 
         baseSalary = ?, monthlyHours = ?, dailyJourney = ?, weeklyLimit = ?, 
@@ -849,7 +978,7 @@ async function startServer() {
       dependentes || 0, adiantamentoPercent || 0, adiantamentoIR || 0, saturdayCompensation ? 1 : 0, cycleStartDay || 15, compDays || '1,2,3,4',
       workStart || '12:00', lunchStart || '17:00', lunchEnd || '18:00', workEnd || '21:00',
       saturdayWorkStart || '12:00', saturdayWorkEnd || '16:00',
-      defaultEmployeeId || null, defaultCompanyId || null,
+      safeDefaultEmployeeId, safeDefaultCompanyId,
       userId
     );
     res.json({ success: true });
@@ -858,8 +987,7 @@ async function startServer() {
   // GET /api/holeriths - lista todos os meses disponiveis
   app.get("/api/holeriths", (req, res) => {
     const userId = Number((req as any).authUser?.id || 0);
-    const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
-    const employeeId = Number(sRow?.defaultEmployeeId || 0);
+    const employeeId = getSafeDefaultEmployeeId(userId);
     if (!employeeId) {
       return res.json([]);
     }
@@ -883,8 +1011,7 @@ async function startServer() {
 
   app.get("/api/banco-horas", (req, res) => {
     const userId = Number((req as any).authUser?.id || 0);
-    const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
-    const employeeId = Number(sRow?.defaultEmployeeId || 0);
+    const employeeId = getSafeDefaultEmployeeId(userId);
     if (!employeeId) {
       return res.json([]);
     }
@@ -900,8 +1027,7 @@ async function startServer() {
 
   app.post("/api/banco-horas", (req, res) => {
     const userId = Number((req as any).authUser?.id || 0);
-    const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
-    const employeeId = Number(sRow?.defaultEmployeeId || 0);
+    const employeeId = getSafeDefaultEmployeeId(userId);
     if (!employeeId) {
       return res.status(400).json({ error: "Funcionario padrao nao configurado." });
     }
@@ -917,8 +1043,7 @@ async function startServer() {
 
   app.delete("/api/banco-horas/:id", (req, res) => {
     const userId = Number((req as any).authUser?.id || 0);
-    const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
-    const employeeId = Number(sRow?.defaultEmployeeId || 0);
+    const employeeId = getSafeDefaultEmployeeId(userId);
     if (!employeeId) {
       return res.json({ success: true, count: 0 });
     }
@@ -938,8 +1063,7 @@ async function startServer() {
       }
 
       const userId = Number((req as any).authUser?.id || 0);
-      const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
-      const employeeId = Number(sRow?.defaultEmployeeId || 0);
+      const employeeId = getSafeDefaultEmployeeId(userId);
 
       const planOwnerId = employeeId > 0 ? employeeId : -userId;
       const row = db.prepare(
@@ -975,8 +1099,7 @@ async function startServer() {
       }
 
       const userId = Number((req as any).authUser?.id || 0);
-      const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
-      const employeeId = Number(sRow?.defaultEmployeeId || 0);
+      const employeeId = getSafeDefaultEmployeeId(userId);
       const payload = JSON.stringify(req.body || {});
       const planOwnerId = employeeId > 0 ? employeeId : -userId;
 
@@ -1003,8 +1126,7 @@ async function startServer() {
       }
 
       const userId = Number((req as any).authUser?.id || 0);
-      const sRow: any = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId);
-      const employeeId = Number(sRow?.defaultEmployeeId || 0);
+      const employeeId = getSafeDefaultEmployeeId(userId);
       const planOwnerId = employeeId > 0 ? employeeId : -userId;
       const result = db.prepare("DELETE FROM simulator_plans WHERE employee_id = ? AND reference = ?").run(planOwnerId, ref);
       res.json({ success: true, count: result.changes });
@@ -1014,11 +1136,11 @@ async function startServer() {
     }
   });
 
-  // POST /api/referencia/:ref — salva dados do cartão (normal + horas extras) para um mês
+  // POST /api/referencia/:ref â€” salva dados do cartÃ£o (normal + horas extras) para um mÃªs
   app.post("/api/referencia/:ref", (req, res) => {
     const { ref } = req.params;
     if (!ref || ref.length !== 6) {
-      return res.status(400).json({ error: "Referência inválida. Use MMYYYY." });
+      return res.status(400).json({ error: "ReferÃªncia invÃ¡lida. Use MMYYYY." });
     }
     const month = parseInt(ref.substring(0, 2), 10);
     const year = parseInt(ref.substring(2), 10);
@@ -1034,6 +1156,7 @@ async function startServer() {
 
     const userId = Number((req as any).authUser?.id || 0);
     ensureSettingsForUser(userId);
+    getSafeDefaultEmployeeId(userId);
     const sRow: any = db.prepare("SELECT * FROM settings WHERE id = ?").get(userId);
     const journeyMinutes = Math.round(((sRow?.dailyJourney || 0) as number) * 60);
     const hasSatComp = !!sRow?.saturdayCompensation;
@@ -1065,14 +1188,28 @@ async function startServer() {
         }
 
         // 2. Resolver Employee
-        let employeeId = sRow?.defaultEmployeeId || null;
-        const eName = body.employeeName || sRow?.employeeName;
-        const eCode = body.employeeCode || sRow?.employeeCode;
-        if (eName && eCode) {
-          db.prepare(`INSERT OR IGNORE INTO employees (code, name, role, location, company_id, cardNumber) VALUES (?, ?, ?, ?, ?, ?)`)
-            .run(eCode, eName, body.role || sRow?.role || null, body.location || sRow?.location || null, companyId, body.cardNumber || sRow?.cardNumber || null);
-          const e = db.prepare("SELECT id FROM employees WHERE code = ?").get(eCode) as any;
-          if (e) employeeId = e.id;
+        let employeeId = getSafeDefaultEmployeeId(userId) || null;
+        const eName = normalizeTextValue(body.employeeName || sRow?.employeeName);
+        const eCodeRaw = normalizeTextValue(body.employeeCode || sRow?.employeeCode);
+        if (eName && eCodeRaw) {
+          const scopedCode = buildScopedEmployeeCode(userId, eCodeRaw);
+          let e = db.prepare("SELECT id FROM employees WHERE code = ?").get(scopedCode) as any;
+          if (!e && userId === 1) {
+            e = db.prepare("SELECT id FROM employees WHERE code = ?").get(eCodeRaw) as any;
+          }
+          if (!e) {
+            db.prepare(`INSERT INTO employees (code, name, role, location, company_id, cardNumber) VALUES (?, ?, ?, ?, ?, ?)`)
+              .run(
+                scopedCode,
+                eName,
+                body.role || sRow?.role || null,
+                body.location || sRow?.location || null,
+                companyId,
+                body.cardNumber || sRow?.cardNumber || null
+              );
+            e = db.prepare("SELECT id FROM employees WHERE code = ?").get(scopedCode) as any;
+          }
+          if (e?.id) employeeId = e.id;
         }
 
         if (!employeeId) throw new Error('Funcionário não encontrado. Configure o funcionário padrão nas configurações.');
@@ -1083,10 +1220,10 @@ async function startServer() {
         db.prepare(`UPDATE holeriths SET
           snapshot_employeeName = ?, snapshot_employeeCode = ?, snapshot_role = ?, snapshot_location = ?,
           snapshot_companyName = ?, snapshot_companyCnpj = ?, snapshot_cardNumber = ?, updatedAt = datetime('now')
-          WHERE id = ?`).run(eName, eCode, body.role || null, body.location || null, cName, cCnpj || null, body.cardNumber || null, h.id);
+          WHERE id = ?`).run(eName, eCodeRaw, body.role || null, body.location || null, cName, cCnpj || null, body.cardNumber || null, h.id);
 
-        // 4. Atualizar defaultEmployeeId / defaultCompanyId nas settings se necessário
-        if (!sRow?.defaultEmployeeId && employeeId) {
+        // 4. Atualizar defaultEmployeeId / defaultCompanyId nas settings se necessÃ¡rio
+        if (!getSafeDefaultEmployeeId(userId) && employeeId) {
           db.prepare("UPDATE settings SET defaultEmployeeId = ? WHERE id = ?").run(employeeId, userId);
         }
         if (!sRow?.defaultCompanyId && companyId) {
@@ -1210,18 +1347,17 @@ async function startServer() {
     const { ref } = req.params;
 
     if (!ref || ref.length !== 6) {
-      return res.status(400).json({ error: "Referência inválida. Use MMYYYY." });
+      return res.status(400).json({ error: "ReferÃªncia invÃ¡lida. Use MMYYYY." });
     }
     const month = parseInt(ref.substring(0, 2), 10);
     const year = parseInt(ref.substring(2), 10);
 
     console.log(`[DEBUG] GET /api/referencia/${ref} -> month=${month}, year=${year}`);
 
-    // Obter funcionário padrão (ou do holerith se existissem múltiplos, mas o app foca em um)
+    // Obter funcionÃ¡rio padrÃ£o (ou do holerith se existissem mÃºltiplos, mas o app foca em um)
     const userId = Number((req as any).authUser?.id || 0);
     ensureSettingsForUser(userId);
-    const settings = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId) as any;
-    const employeeId = settings?.defaultEmployeeId;
+    const employeeId = getSafeDefaultEmployeeId(userId);
 
     if (!employeeId) {
       return res.json({
@@ -1257,7 +1393,7 @@ async function startServer() {
       marcacoes = db.prepare("SELECT type, frontImage, backImage FROM marcacoes WHERE holerith_id = ?").all(h.id) as any[];
     }
 
-    // Garantir 31 dias preenchidos em cada cartão com base no ciclo de fechamento
+    // Garantir 31 dias preenchidos em cada cartÃ£o com base no ciclo de fechamento
     const sRow: any = db.prepare("SELECT cycleStartDay FROM settings WHERE id = ?").get(userId);
     const cycleStartDay = clampCycleStartDay(sRow?.cycleStartDay);
 
@@ -1337,14 +1473,13 @@ async function startServer() {
       const { ref } = req.params;
       const type = String(req.query.type || 'all');
       if (!ref || ref.length !== 6) {
-        return res.status(400).json({ error: "Referência inválida. Use MMYYYY." });
+        return res.status(400).json({ error: "ReferÃªncia invÃ¡lida. Use MMYYYY." });
       }
 
       const month = parseInt(ref.substring(0, 2), 10);
       const year = parseInt(ref.substring(2), 10);
       const userId = Number((req as any).authUser?.id || 0);
-      const settings = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId) as any;
-      const employeeId = settings?.defaultEmployeeId;
+      const employeeId = getSafeDefaultEmployeeId(userId);
       if (!employeeId) return res.json({ success: true, count: 0 });
 
       const hol = db.prepare("SELECT id FROM holeriths WHERE employee_id = ? AND month = ? AND year = ?").get(employeeId, month, year) as any;
@@ -1388,8 +1523,7 @@ async function startServer() {
   app.delete("/api/referencias", (req, res) => {
     try {
       const userId = Number((req as any).authUser?.id || 0);
-      const settings = db.prepare("SELECT defaultEmployeeId FROM settings WHERE id = ?").get(userId) as any;
-      const employeeId = Number(settings?.defaultEmployeeId || 0);
+      const employeeId = getSafeDefaultEmployeeId(userId);
       if (!employeeId) {
         return res.json({ success: true, count: 0 });
       }
@@ -1437,6 +1571,7 @@ async function startServer() {
 }
 
 startServer();
+
 
 
 

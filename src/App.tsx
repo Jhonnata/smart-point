@@ -32,7 +32,8 @@ type CardSaveMode = 'merge' | 'replace';
 type AuthMode = 'login' | 'register';
 type AuthUser = {
   id: number;
-  username: string;
+  email: string;
+  username?: string;
   displayName: string;
 };
 
@@ -59,10 +60,23 @@ export default function App() {
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [authForm, setAuthForm] = useState({
-    username: '',
+    email: '',
     password: '',
     displayName: ''
   });
+
+  const normalizeAuthUser = React.useCallback((raw: any): AuthUser | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    const email = String(raw.email || raw.username || '').trim().toLowerCase();
+    const id = Number(raw.id || 0);
+    if (!id || !email) return null;
+    return {
+      id,
+      email,
+      username: email,
+      displayName: String(raw.displayName || email)
+    };
+  }, []);
 
   const normalizeMonthKey = React.useCallback((value: string): string => {
     const match = String(value || '').trim().match(/^(\d{4})-(\d{1,2})$/);
@@ -278,7 +292,7 @@ export default function App() {
         }
         const data = await res.json();
         if (!cancelled) {
-          setAuthUser(data?.user || null);
+          setAuthUser(normalizeAuthUser(data?.user));
         }
       } catch (err) {
         console.error('Error checking session:', err);
@@ -289,7 +303,7 @@ export default function App() {
     };
     bootstrapAuth();
     return () => { cancelled = true; };
-  }, []);
+  }, [normalizeAuthUser]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -403,11 +417,15 @@ export default function App() {
   }, [monthHoursEntries, monthHeEntries, settings, monthData]);
 
   const submitAuth = async (mode: AuthMode) => {
-    const username = authForm.username.trim().toLowerCase();
+    const email = authForm.email.trim().toLowerCase();
     const password = authForm.password;
     const displayName = authForm.displayName.trim();
-    if (!username || !password) {
-      toast.error('Informe usuário e senha.');
+    if (!email || !password) {
+      toast.error('Informe e-mail e senha.');
+      return;
+    }
+    if (mode === 'register' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      toast.error('Informe um e-mail valido.');
       return;
     }
     if (mode === 'register' && !displayName) {
@@ -420,7 +438,7 @@ export default function App() {
       const res = await fetch(mode === 'login' ? '/api/auth/login' : '/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password, displayName })
+        body: JSON.stringify({ email, password, displayName })
       });
 
       const data = await res.json().catch(() => ({}));
@@ -428,7 +446,7 @@ export default function App() {
         throw new Error(data?.error || 'Falha na autenticação.');
       }
 
-      const user = data?.user as AuthUser | undefined;
+      const user = normalizeAuthUser(data?.user);
       if (!user) throw new Error('Sessão não retornada pelo servidor.');
 
       setAuthUser(user);
@@ -711,24 +729,24 @@ export default function App() {
 
   if (!authUser) {
     return (
-      <div className="min-h-screen bg-[#F8F9FA] flex items-center justify-center p-4">
-        <div className="w-full max-w-md bg-white border border-zinc-100 rounded-3xl p-8 shadow-sm">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center">
-              <PlusCircle className="w-6 h-6 text-white" />
+      <div className="min-h-screen bg-[#F8F9FA] flex items-start sm:items-center justify-center px-3 py-4 sm:p-4 overflow-y-auto">
+        <div className="w-full max-w-md bg-white border border-zinc-100 rounded-2xl sm:rounded-3xl p-5 sm:p-8 shadow-sm">
+          <div className="flex items-center gap-3 mb-5 sm:mb-6">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 bg-zinc-900 rounded-xl flex items-center justify-center">
+              <PlusCircle className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
             </div>
             <div>
-              <h1 className="font-black text-2xl tracking-tighter text-zinc-900">PontoSmart</h1>
-              <p className="text-xs text-zinc-500">Acesso por usuário</p>
+              <h1 className="font-black text-xl sm:text-2xl tracking-tighter text-zinc-900">PontoSmart</h1>
+              <p className="text-xs text-zinc-500">Acesso por e-mail</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 bg-zinc-100 rounded-xl p-1 mb-5">
+          <div className="flex items-center gap-2 bg-zinc-100 rounded-xl p-1 mb-4 sm:mb-5">
             <button
               type="button"
               onClick={() => setAuthMode('login')}
               className={cn(
-                'flex-1 rounded-lg py-2 text-sm font-bold transition',
+                'flex-1 rounded-lg py-2.5 text-sm font-bold transition',
                 authMode === 'login' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'
               )}
             >
@@ -738,7 +756,7 @@ export default function App() {
               type="button"
               onClick={() => setAuthMode('register')}
               className={cn(
-                'flex-1 rounded-lg py-2 text-sm font-bold transition',
+                'flex-1 rounded-lg py-2.5 text-sm font-bold transition',
                 authMode === 'register' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'
               )}
             >
@@ -762,11 +780,11 @@ export default function App() {
               />
             )}
             <input
-              value={authForm.username}
-              onChange={(e) => setAuthForm((prev) => ({ ...prev, username: e.target.value }))}
+              value={authForm.email}
+              onChange={(e) => setAuthForm((prev) => ({ ...prev, email: e.target.value }))}
               className="w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-zinc-900"
-              placeholder="Usuário"
-              autoComplete="username"
+              placeholder="E-mail"
+              autoComplete="email"
             />
             <input
               type="password"
@@ -786,12 +804,10 @@ export default function App() {
               {authSubmitting ? 'Aguarde...' : (authMode === 'login' ? 'Entrar' : 'Criar conta')}
             </button>
           </form>
-          {authMode === 'login' && (
-            <p className="mt-4 text-xs text-zinc-500">
-              Primeiro acesso: usuário <span className="font-bold">admin</span> e senha <span className="font-bold">admin123</span> (altere após entrar).
-            </p>
-          )}
-          <Toaster position="top-right" richColors />
+          <p className="mt-4 text-xs text-zinc-500">
+            Não compartilhe sua senha. Para novo acesso, use a aba <span className="font-bold">Criar conta</span>.
+          </p>
+          <Toaster position="top-center" richColors />
         </div>
       </div>
     );
@@ -856,11 +872,11 @@ export default function App() {
 
         <div className="p-6 border-t border-zinc-50">
           <div className="mb-3 px-2">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Usuário</div>
+            <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">E-mail</div>
             <div className="text-sm font-extrabold text-zinc-900 truncate">
-              {authUser.displayName || authUser.username}
+              {authUser.displayName || authUser.email}
             </div>
-            <div className="text-[11px] text-zinc-500 truncate">@{authUser.username}</div>
+            <div className="text-[11px] text-zinc-500 truncate">{authUser.email}</div>
           </div>
           <button
             onClick={logout}
