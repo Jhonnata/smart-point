@@ -28,7 +28,22 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
 
   const getMonthStats = (month: string) => {
     const monthEntries = entries.filter(e => entryMonthKey(e as any) === month);
-    const totalDays = monthEntries.filter(e => e.entry1 || e.entry2 || e.entryExtra).length;
+    const hasAnyTime = (e: TimeEntry) =>
+      !!(e.entry1 || '').trim() ||
+      !!(e.exit1 || '').trim() ||
+      !!(e.entry2 || '').trim() ||
+      !!(e.exit2 || '').trim() ||
+      !!(e.entryExtra || '').trim() ||
+      !!(e.exitExtra || '').trim();
+
+    // Conta dias únicos da competência (01..31), evitando duplicidade entre cartão normal e extra.
+    const uniqueDays = new Set(
+      monthEntries
+        .filter(hasAnyTime)
+        .map((e) => (e.day || '').toString().padStart(2, '0'))
+        .filter(Boolean)
+    );
+    const totalDays = uniqueDays.size;
     return { totalDays };
   };
 

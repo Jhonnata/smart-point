@@ -164,17 +164,31 @@ export function calcularHoleriteCompleto({
 
   // 4) DSR sobre horas extras
   const valorDSR = diasUteis > 0 ? (totalHorasExtras / diasUteis) * domingosEFeriados : 0;
+  const descontoDSRAtraso = diasUteis > 0 ? (atraso / diasUteis) * domingosEFeriados : 0;
 
   // 5) Total proventos
   const totalProventos = salarioBase + totalHorasExtras + valorDSR;
 
-  // 6) INSS (faixas 2026 projetadas / 2025 atualizadas)
+  // 6) INSS progressivo (faixas oficiais de 2026)
+  const INSS_FAIXAS_2026 = [
+    { limite: 1621.00, aliquota: 0.075 },
+    { limite: 2902.84, aliquota: 0.09 },
+    { limite: 4354.27, aliquota: 0.12 },
+    { limite: 8475.55, aliquota: 0.14 },
+  ];
+  const tetoINSS = INSS_FAIXAS_2026[INSS_FAIXAS_2026.length - 1].limite;
+  const baseINSS = Math.min(Math.max(0, totalProventos), tetoINSS);
   let inss = 0;
-  if (totalProventos <= 1518.00) inss = totalProventos * 0.075;
-  else if (totalProventos <= 2793.88) inss = totalProventos * 0.09 - 22.77;
-  else if (totalProventos <= 4190.83) inss = totalProventos * 0.12 - 106.59;
-  else if (totalProventos <= 8157.41) inss = totalProventos * 0.14 - 190.40;
-  else inss = 8157.41 * 0.14 - 190.40;
+  let restanteINSS = baseINSS;
+  let limiteAnterior = 0;
+  for (const faixa of INSS_FAIXAS_2026) {
+    if (restanteINSS <= 0) break;
+    const amplitude = faixa.limite - limiteAnterior;
+    const baseFaixa = Math.min(restanteINSS, amplitude);
+    inss += baseFaixa * faixa.aliquota;
+    restanteINSS -= baseFaixa;
+    limiteAnterior = faixa.limite;
+  }
 
   // 7) IR total devido no mês (Tabela TRADICIONAL + Redutor 2026 simultâneo)
   const valorDependente = 189.59;
@@ -229,7 +243,7 @@ export function calcularHoleriteCompleto({
   if (irRetidoNoFechamento < 0) irRetidoNoFechamento = 0;
 
   // 10) Total de descontos
-  const totalDescontosReal = atraso + inss + irRetidoNoFechamento + adiantamentoBruto;
+  const totalDescontosReal = atraso + descontoDSRAtraso + inss + irRetidoNoFechamento + adiantamentoBruto;
 
   // 11) Arredondamento automático e totalDescontos arredondado
   const totalDescontos = Number(totalDescontosReal.toFixed(2));
@@ -258,6 +272,7 @@ export function calcularHoleriteCompleto({
       totalProventos: Number(totalProventos.toFixed(2)),
 
       inss: Number(inss.toFixed(2)),
+      baseINSS: Number(baseINSS.toFixed(2)),
       baseIR: Number(baseIR.toFixed(2)),
       irBaseTradicional: Number(irBaseTradicional.toFixed(2)),
       redutorMensal2026: Number(redutorMensal2026.toFixed(2)),
@@ -271,6 +286,7 @@ export function calcularHoleriteCompleto({
       adiantamentoLiquido: Number(adiantamentoLiquido.toFixed(2)),
 
       atraso: Number(atraso.toFixed(2)),
+      descontoDSRAtraso: Number(descontoDSRAtraso.toFixed(2)),
       arredondamento: Number(arredondamento.toFixed(2)),
       totalDescontos: Number(totalDescontos.toFixed(2)),
 

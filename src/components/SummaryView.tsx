@@ -3,7 +3,14 @@ import { DollarSign, TrendingUp, Clock, Calendar, Printer, AlertTriangle, Chevro
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { format, parseISO, isValid } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { calculateOvertime, normalizeOvernightEntries, type Settings, type TimeEntry } from '../lib/calculations';
+import {
+  calculateOvertime,
+  normalizeOvernightEntries,
+  resolveDailyJourneyMinutes,
+  sumEntryWorkedMinutes,
+  type Settings,
+  type TimeEntry
+} from '../lib/calculations';
 import { formatCurrency, cn, formatMinutesAsHoursClock } from '../lib/utils';
 import { calcularHoleriteCompleto } from '../lib/payroll';
 import DualCardView from './DualCardView';
@@ -49,37 +56,14 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
         if (!isValid(date)) return;
         const isSunday = date.getDay() === 0;
 
-        const timeToMin = (t: string) => {
-          if (!t || !t.includes(':')) return 0;
-          const [h, m] = t.split(':').map(Number);
-          return h * 60 + m;
-        };
-
-        const periods = [
-          [entry.entry1, entry.exit1],
-          [entry.entry2, entry.exit2],
-          [entry.entryExtra, entry.exitExtra]
-        ];
-
-        let dailyMinutes = 0;
-        periods.forEach(([s, e]) => {
-           if (!s || !e || !s.includes(':') || !e.includes(':')) return;
-           let d = timeToMin(e) - timeToMin(s);
-           if (d < 0) d += 24 * 60;
-           dailyMinutes += d;
-        });
-
-        let journeyMin = isOvertimeCard ? 0 : (settings.dailyJourney || 0) * 60;
-        
-        if (!isOvertimeCard && settings.saturdayCompensation) {
-          const dayOfWeek = date.getDay();
-          const compDays = (settings.compDays || '1,2,3,4').split(',').map(Number);
-          if (compDays.includes(dayOfWeek)) {
-            journeyMin += 60;
-          } else if (dayOfWeek === 6) {
-            journeyMin = 0;
-          }
-        }
+        const dailyMinutes = sumEntryWorkedMinutes(entry);
+        const journeyMin = resolveDailyJourneyMinutes(
+          settings.dailyJourney || 0,
+          isOvertimeCard,
+          date.getDay(),
+          !!settings.saturdayCompensation,
+          settings.compDays
+        );
         
         if (!isOvertimeCard && !isSunday) {
           if (entry.isDPAnnotation) return;
@@ -372,7 +356,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
             <h3 className="text-sm font-bold text-zinc-900 uppercase tracking-widest mb-6 border-b border-zinc-50 pb-4">Detalhamento de Descontos</h3>
             <div className="space-y-4">
               <div className="flex justify-between items-center">
-                <span className="text-sm text-zinc-500 font-medium">INSS (Folha 2025)</span>
+                <span className="text-sm text-zinc-500 font-medium">INSS (Folha 2026)</span>
                 <span className="font-bold text-rose-500">-{formatCurrency(payroll.valores.inss)}</span>
               </div>
               <div className="flex justify-between items-center">
@@ -383,6 +367,12 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
                 <span className="text-sm text-zinc-500 font-medium italic">Atrasos / Faltas</span>
                 <span className="font-bold text-rose-500">-{formatCurrency(results.totalAtrasoValue)}</span>
               </div>
+              {payroll.valores.descontoDSRAtraso > 0 && (
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-zinc-500 font-medium italic">DSR s/ Atrasos / Faltas</span>
+                  <span className="font-bold text-rose-500">-{formatCurrency(payroll.valores.descontoDSRAtraso)}</span>
+                </div>
+              )}
               <div className="flex justify-between items-center">
                 <span className="text-sm text-zinc-500 font-medium">Adiantamento Bruto</span>
                 <span className="font-bold text-zinc-900">-{formatCurrency(payroll.valores.adiantamentoBruto)}</span>

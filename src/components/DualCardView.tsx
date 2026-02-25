@@ -1,8 +1,8 @@
 ﻿import React from 'react';
 import { ArrowLeft, Save, Upload, Calendar, Clock } from 'lucide-react';
-import { parseISO, isValid } from 'date-fns';
+import { differenceInCalendarDays, parseISO, isValid } from 'date-fns';
 import { toast } from 'sonner';
-import type { TimeEntry, Settings } from '../lib/calculations';
+import { normalizeOvernightEntries, type TimeEntry, type Settings } from '../lib/calculations';
 import { cn } from '../lib/utils';
 
 interface Props {
@@ -197,8 +197,21 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
 
   const commit = () => {
     if (disableSave) return;
-    const leftFinal = left.map(e => ({ ...e, totalHours: calcTotal(e), isOvertimeCard: false }));
-    const rightFinal = right.map(e => ({ ...e, totalHours: calcTotal(e), isOvertimeCard: true }));
+    const leftNormalizedByDay = new Map(
+      normalizeOvernightEntries(left).map((row) => [row.day || '', row])
+    );
+    const rightNormalizedByDay = new Map(
+      normalizeOvernightEntries(right).map((row) => [row.day || '', row])
+    );
+
+    const leftFinal = left.map((e) => {
+      const normalized = leftNormalizedByDay.get(e.day || '') || e;
+      return { ...e, totalHours: calcTotal(normalized), isOvertimeCard: false };
+    });
+    const rightFinal = right.map((e) => {
+      const normalized = rightNormalizedByDay.get(e.day || '') || e;
+      return { ...e, totalHours: calcTotal(normalized), isOvertimeCard: true };
+    });
     onSave([...leftFinal, ...rightFinal]);
   };
 
@@ -314,12 +327,16 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
           </thead>
           <tbody className="divide-y divide-zinc-50">
           {(() => {
+            const normalizedByDay = new Map(
+              normalizeOvernightEntries(list).map((row) => [row.day || '', row])
+            );
             const rows: React.ReactNode[] = [];
             let weekStartDay: string | null = null;
             let weekStartLabel: string | null = null;
             let weekTotalMinutes = 0;
 
             list.forEach((e, idx) => {
+              const normalizedEntry = normalizedByDay.get(e.day || '') || e;
               const date = parseISO(e.date);
               const validDate = isValid(date);
               const dayOfWeek = validDate ? date.getDay() : -1;
@@ -333,7 +350,7 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
                 weekStartLabel = WEEKDAY_ABBR[dayOfWeek];
               }
               if (isMonToSat) {
-                weekTotalMinutes += calcWorkedMinutes(e);
+                weekTotalMinutes += calcWorkedMinutes(normalizedEntry);
               }
 
               rows.push(
@@ -428,8 +445,8 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
                     />
                   </td>
                   <td className="px-2 py-1.5 text-right bg-zinc-50/20">
-                    {calcTotal(e) ? (
-                      <span className="font-black text-zinc-900 text-[11px]">{calcTotal(e)}</span>
+                    {calcTotal(normalizedEntry) ? (
+                      <span className="font-black text-zinc-900 text-[11px]">{calcTotal(normalizedEntry)}</span>
                     ) : (
                       <span className="text-zinc-200 text-[11px]">--</span>
                     )}
@@ -439,7 +456,19 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
 
               const isEndOfWeek = dayOfWeek === 6;
               const isLastRow = idx === list.length - 1;
-              if (weekStartDay && (isEndOfWeek || isLastRow)) {
+              const nextEntry = !isLastRow ? list[idx + 1] : null;
+              const nextDate = nextEntry ? parseISO(nextEntry.date) : null;
+              const nextValidDate = !!nextDate && isValid(nextDate);
+              const hasDateDiscontinuity =
+                validDate &&
+                nextValidDate &&
+                differenceInCalendarDays(nextDate as Date, date) !== 1;
+
+              // A card cycle can cross month/year boundaries (e.g. 15/jan -> 16/dez).
+              // In these points we must close the current week block even if it's not Saturday.
+              const shouldCloseByCycleBreak = !!weekStartDay && !isEndOfWeek && hasDateDiscontinuity;
+
+              if (weekStartDay && (isEndOfWeek || isLastRow || shouldCloseByCycleBreak)) {
                 const currentWeekEnd = e.day || '';
                 const currentWeekEndLabel = validDate ? WEEKDAY_ABBR[dayOfWeek] : '';
                 const achieved = weekTotalMinutes >= weeklyTargetMinutes;

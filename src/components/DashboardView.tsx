@@ -6,7 +6,7 @@ import { ptBR } from 'date-fns/locale';
 import type { TimeEntry } from '../services/aiService';
 import type { Settings } from '../lib/calculations';
 import { formatCurrency } from '../lib/utils';
-import { calculateOvertime } from '../lib/calculations';
+import { calculateOvertime, normalizeOvernightEntries, sumEntryWorkedMinutes } from '../lib/calculations';
 
 interface Props {
   entries: TimeEntry[];
@@ -33,28 +33,11 @@ export default function DashboardView({ entries, settings }: Props) {
     const sortedMonths = Array.from(months).sort();
     
     const monthlyStats = sortedMonths.map(month => {
-      const monthEntries = entries.filter(e => entryMonthKey(e as any) === month);
+      const monthEntriesRaw = entries.filter(e => entryMonthKey(e as any) === month);
+      const monthEntries = normalizeOvernightEntries(monthEntriesRaw);
       const res = calculateOvertime(monthEntries, settings);
       
-      let totalMinutes = 0;
-      monthEntries.forEach(entry => {
-          const timeToMin = (t: string) => {
-              if (!t || !t.includes(':')) return 0;
-              const [h, m] = t.split(':').map(Number);
-              return h * 60 + m;
-          };
-          const periods = [
-              [entry.entry1, entry.exit1],
-              [entry.entry2, entry.exit2],
-              [entry.entryExtra, entry.exitExtra]
-          ];
-          periods.forEach(([s, e]) => {
-              if (!s || !e || !s.includes(':') || !e.includes(':')) return;
-              let d = timeToMin(e) - timeToMin(s);
-              if (d < 0) d += 24 * 60;
-              totalMinutes += d;
-          });
-      });
+      const totalMinutes = monthEntries.reduce((acc, entry) => acc + sumEntryWorkedMinutes(entry), 0);
 
       const dateObj = parseISO(month + '-01');
       return {

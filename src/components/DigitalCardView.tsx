@@ -3,6 +3,7 @@ import { Edit2, Save, Trash2, Plus, FileText, ArrowLeft, Clock } from 'lucide-re
 import { format, parseISO, isValid, getDaysInMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import type { TimeEntry } from '../services/aiService';
+import { minutesToTime, sumEntryWorkedMinutes } from '../lib/calculations';
 import { cn } from '../lib/utils';
 
 interface Props {
@@ -67,28 +68,7 @@ export default function DigitalCardView({ entries, onSave, onBack }: Props) {
   };
 
   const calculateDailyTotal = (entry: TimeEntry) => {
-    const timeToMin = (t: string) => {
-      if (!t || !t.includes(':')) return 0;
-      const [h, m] = t.split(':').map(Number);
-      return h * 60 + m;
-    };
-
-    const diff = (start: string, end: string) => {
-      const s = timeToMin(start);
-      const e = timeToMin(end);
-      if (s === 0 && e === 0) return 0;
-      let d = e - s;
-      if (d < 0) d += 24 * 60;
-      return d;
-    };
-
-    const totalMin = diff(entry.entry1, entry.exit1) + 
-                   diff(entry.entry2, entry.exit2) + 
-                   diff(entry.entryExtra, entry.exitExtra);
-    
-    const h = Math.floor(totalMin / 60);
-    const m = Math.round(totalMin % 60);
-    return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+    return minutesToTime(sumEntryWorkedMinutes(entry));
   };
 
   const saveChanges = () => {

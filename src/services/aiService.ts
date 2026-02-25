@@ -293,6 +293,22 @@ async function parseWithOpenAI(
   return JSON.parse(content || "{}") as PontoData;
 }
 
+type AIProvider = Settings['aiProvider'];
+type ParseStrategy = (images: string[], settings: Settings) => Promise<PontoData>;
+
+const parseStrategies: Record<AIProvider, ParseStrategy> = {
+  gemini: (images, settings) => parseWithGemini(images, settings),
+  openai: (images, settings) => parseWithOpenAI(images, settings, false),
+  codex: (images, settings) => parseWithOpenAI(images, settings, true)
+};
+
+function getGeminiFallbackStrategies(settings: Settings): Array<{ provider: AIProvider; parse: ParseStrategy }> {
+  const fallbacks: Array<{ provider: AIProvider; parse: ParseStrategy }> = [];
+  if (settings.openaiApiKey) fallbacks.push({ provider: 'openai', parse: parseStrategies.openai });
+  if (settings.codexApiKey) fallbacks.push({ provider: 'codex', parse: parseStrategies.codex });
+  return fallbacks;
+}
+
 export async function parsePontoImage(
   images: string[], 
   settings?: Settings,
@@ -303,25 +319,25 @@ export async function parsePontoImage(
   }
 
   try {
+    const provider = settings.aiProvider || 'gemini';
+    const primaryStrategy = parseStrategies[provider];
     let result: PontoData;
-    if (settings.aiProvider === 'openai') {
-      result = await parseWithOpenAI(images, settings);
-    } else if (settings.aiProvider === 'codex') {
-      result = await parseWithOpenAI(images, settings, true);
+
+    if (provider !== 'gemini') {
+      result = await primaryStrategy(images, settings);
     } else {
       try {
-        result = await parseWithGemini(images, settings);
+        result = await primaryStrategy(images, settings);
       } catch (geminiError) {
         if (isGeminiUnavailableError(geminiError)) {
-          if (settings.openaiApiKey) {
-            console.warn("Gemini indisponível. Fazendo fallback para OpenAI.");
-            result = await parseWithOpenAI(images, settings);
-          } else if (settings.codexApiKey) {
-            console.warn("Gemini indisponível. Fazendo fallback para Codex.");
-            result = await parseWithOpenAI(images, settings, true);
-          } else {
+          const fallbacks = getGeminiFallbackStrategies(settings);
+          if (fallbacks.length === 0) {
             throw new Error("Gemini indisponível no momento (alta demanda). Tente novamente em alguns instantes.");
           }
+
+          const fallback = fallbacks[0];
+          console.warn(`Gemini indisponível. Fazendo fallback para ${fallback.provider.toUpperCase()}.`);
+          result = await fallback.parse(images, settings);
         } else {
           throw geminiError;
         }

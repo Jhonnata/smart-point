@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   Settings as SettingsIcon, 
@@ -26,6 +26,7 @@ import { parseISO, isValid, format as formatDate } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 type View = 'dashboard' | 'resumo' | 'holerith' | 'card' | 'card-list' | 'upload' | 'settings';
+type CardSaveMode = 'merge' | 'replace';
 
 export default function App() {
   const [view, setView] = useState<View>(() => {
@@ -43,6 +44,14 @@ export default function App() {
   const [monthData, setMonthData] = useState<any>(null);
   const [isMonthLoading, setIsMonthLoading] = useState(false);
   const [uploadContext, setUploadContext] = useState<{ month: string, isOvertime: boolean } | null>(null);
+  const [pendingCardSaveMode, setPendingCardSaveMode] = useState<CardSaveMode | null>(null);
+  const [localProjectedByMonth, setLocalProjectedByMonth] = useState<Record<string, any>>({});
+
+  const normalizeMonthKey = React.useCallback((value: string): string => {
+    const match = String(value || '').trim().match(/^(\d{4})-(\d{1,2})$/);
+    if (!match) return String(value || '').trim();
+    return `${match[1]}-${match[2].padStart(2, '0')}`;
+  }, []);
 
   const mapRefRowsToEntries = React.useCallback((
     list: any[] = [],
@@ -188,29 +197,45 @@ export default function App() {
       return;
     }
 
-    setMonthData(null);
+    const monthKey = normalizeMonthKey(selectedMonth);
+    const localProjected = localProjectedByMonth[monthKey];
+    if (localProjected) {
+      setMonthData(localProjected);
+      setIsMonthLoading(false);
+      return;
+    }
+
+    let cancelled = false;
     setIsMonthLoading(true);
 
     const fetchMonthData = async () => {
       try {
-        const cached = monthCache[selectedMonth];
+        const cached = monthCache[monthKey];
+        if (cancelled) return;
         if (cached) {
           setMonthData(cached);
+        } else {
+          setMonthData(null);
         }
-        const fresh = await fetchReferenceByMonth(selectedMonth);
+        const fresh = await fetchReferenceByMonth(monthKey);
+        if (cancelled) return;
+        if (localProjectedByMonth[monthKey]) return;
         if (fresh) {
           setMonthData(fresh);
-          setMonthCache(prev => ({ ...prev, [selectedMonth]: fresh }));
+          setMonthCache(prev => ({ ...prev, [monthKey]: fresh }));
         }
       } catch (err) {
         console.error("Error fetching month data", err);
       } finally {
-        setIsMonthLoading(false);
+        if (!cancelled) {
+          setIsMonthLoading(false);
+        }
       }
     };
 
     fetchMonthData();
-  }, [selectedMonth, fetchReferenceByMonth]);
+    return () => { cancelled = true; };
+  }, [selectedMonth, fetchReferenceByMonth, localProjectedByMonth, normalizeMonthKey]);
 
   useEffect(() => {
     // Only fetch settings if they haven't been loaded yet
@@ -243,7 +268,7 @@ export default function App() {
   const monthHoursEntries = React.useMemo(() => {
     if (!selectedMonth) return [] as TimeEntry[];
 
-    const source = monthData || monthCache[selectedMonth];
+    const source = localProjectedByMonth[selectedMonth] || monthData || monthCache[selectedMonth];
     if (source && (Array.isArray(source.hours) || Array.isArray(source.he))) {
       if (source.hasNormalCard === false) return [] as TimeEntry[];
       return mapRefRowsToEntries(source.hours || [], false, {
@@ -263,12 +288,12 @@ export default function App() {
       }
       return e.date && e.date.startsWith(selectedMonth) && !(e as any).isOvertimeCard;
     }) as TimeEntry[];
-  }, [entries, selectedMonth, monthData, monthCache, mapRefRowsToEntries]);
+  }, [entries, selectedMonth, monthData, monthCache, localProjectedByMonth, mapRefRowsToEntries]);
 
   const monthHeEntries = React.useMemo(() => {
     if (!selectedMonth) return [] as TimeEntry[];
 
-    const source = monthData || monthCache[selectedMonth];
+    const source = localProjectedByMonth[selectedMonth] || monthData || monthCache[selectedMonth];
     if (source && (Array.isArray(source.hours) || Array.isArray(source.he))) {
       if (source.hasOvertimeCard === false) return [] as TimeEntry[];
       return mapRefRowsToEntries(source.he || [], true, {
@@ -288,7 +313,7 @@ export default function App() {
       }
       return e.date && e.date.startsWith(selectedMonth) && !!(e as any).isOvertimeCard;
     }) as TimeEntry[];
-  }, [entries, selectedMonth, monthData, monthCache, mapRefRowsToEntries]);
+  }, [entries, selectedMonth, monthData, monthCache, localProjectedByMonth, mapRefRowsToEntries]);
 
   const filteredEntries = React.useMemo(() => {
     return [...monthHoursEntries, ...monthHeEntries];
@@ -357,7 +382,7 @@ export default function App() {
     hours: any[]; he: any[];
     frontImage?: string; backImage?: string;
     frontImageHe?: string; backImageHe?: string;
-  }) => {
+  }, nextView: View = 'dashboard') => {
     const ref = `${payload.month}${payload.year}`;
     console.log(`Saving card via POST /api/referencia/${ref}`);
     try {
@@ -375,6 +400,12 @@ export default function App() {
 
       const monthKey = `${payload.year}-${String(payload.month).padStart(2, '0')}`;
       await refreshHolerithsAndCache(monthKey);
+      setLocalProjectedByMonth((prev) => {
+        if (!prev[monthKey]) return prev;
+        const next = { ...prev };
+        delete next[monthKey];
+        return next;
+      });
 
       const mRes = await fetch(`/api/referencia/${ref}`);
       if (mRes.ok) {
@@ -384,7 +415,7 @@ export default function App() {
       }
 
       toast.success("Dados salvos com sucesso!");
-      setView('dashboard');
+      setView(nextView);
     } catch (err: any) {
       console.error("Error saving card:", err);
       toast.error(err.message || "Erro ao salvar os dados.");
@@ -395,14 +426,21 @@ export default function App() {
   const saveEntries = async (newEntries: TimeEntry[]) => {
     if (!newEntries || newEntries.length === 0) return;
     const sample = newEntries[0] as any;
-    const selected = selectedMonth ? selectedMonth.split('-') : [];
+    const normalizedSelectedMonth = normalizeMonthKey(selectedMonth || '');
+    const selected = normalizedSelectedMonth ? normalizedSelectedMonth.split('-') : [];
     const refYear = selectedMonth ? Number(selected[0]) : (sample.year || Number((sample.workDate || sample.date || '').substring(0, 4)));
     const refMonth = selectedMonth ? selected[1] : (sample.month || (sample.workDate || sample.date || '').substring(5, 7));
     if (!refMonth || !refYear) { toast.error('Mês/ano inválido.'); return; }
 
+    const monthKey = normalizeMonthKey(`${refYear}-${String(refMonth).padStart(2, '0')}`);
+
     const normalRows = newEntries.filter(e => !e.isOvertimeCard);
     const overtimeRows = newEntries.filter(e => !!e.isOvertimeCard);
-    const currentRef = monthData || (selectedMonth ? monthCache[selectedMonth] : null);
+    const currentRef =
+      monthData ||
+      monthCache[monthKey] ||
+      localProjectedByMonth[monthKey] ||
+      (selectedMonth ? monthCache[normalizeMonthKey(selectedMonth)] : null);
 
     const hasPayloadData = (row: TimeEntry) => {
       const fields = [row.entry1, row.exit1, row.entry2, row.exit2, row.entryExtra, row.exitExtra];
@@ -441,13 +479,29 @@ export default function App() {
     const frontImageHe = persistOvertime ? overtimeSample?.frontImage : undefined;
     const backImageHe = persistOvertime ? overtimeSample?.backImage : undefined;
 
-    await saveCard({
-      companyName: sample.companyName, companyCnpj: sample.companyCnpj,
-      employeeName: sample.employeeName, employeeCode: sample.employeeCode,
-      role: sample.role, location: sample.location, cardNumber: sample.cardNumber,
-      month: String(refMonth).padStart(2,'0'), year: Number(refYear),
-      hours, he, frontImage, backImage, frontImageHe, backImageHe
-    });
+    try {
+      const currentUpdateMode: CardSaveMode = pendingCardSaveMode || 'merge';
+      if (currentUpdateMode === 'replace') {
+        const ref = `${String(refMonth).padStart(2, '0')}${refYear}`;
+        const delRes = await fetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
+        if (!delRes.ok && delRes.status !== 404) {
+          const delErr = await delRes.json().catch(() => ({}));
+          throw new Error(delErr.error || `Falha ao limpar competencia para substituicao (${delRes.status}).`);
+        }
+      }
+
+      await saveCard({
+        companyName: sample.companyName, companyCnpj: sample.companyCnpj,
+        employeeName: sample.employeeName, employeeCode: sample.employeeCode,
+        role: sample.role, location: sample.location, cardNumber: sample.cardNumber,
+        month: String(refMonth).padStart(2,'0'), year: Number(refYear),
+        hours, he, frontImage, backImage, frontImageHe, backImageHe
+      });
+      setPendingCardSaveMode(null);
+    } catch (err: any) {
+      console.error('Error saving entries:', err);
+      toast.error(err?.message || 'Falha ao salvar lancamento.');
+    }
   };
 
   const clearData = async () => {
@@ -464,6 +518,7 @@ export default function App() {
             setEntries([]);
             setHoleriths([]);
             setMonthCache({});
+            setLocalProjectedByMonth({});
             setMonthData(null);
             setSelectedMonth('');
             toast.success("Todos os dados foram limpos.");
@@ -499,6 +554,13 @@ export default function App() {
             console.log('Delete response:', data);
 
             await refreshHolerithsAndCache();
+            const normalizedMonth = normalizeMonthKey(month);
+            setLocalProjectedByMonth((prev) => {
+              if (!prev[normalizedMonth]) return prev;
+              const next = { ...prev };
+              delete next[normalizedMonth];
+              return next;
+            });
             toast.success(`Cartão de ${monthName} removido.`);
 
           } catch (err) {
@@ -687,7 +749,7 @@ export default function App() {
                     </div>
                     <div className="space-y-2">
                       <h3 className="text-2xl font-bold text-zinc-900">Nenhum dado encontrado</h3>
-                      <p className="text-zinc-500 max-w-xs">Comece digitalizando seu cartão de ponto para ver o resumo financeiro.</p>
+                      <p className="text-zinc-500 max-w-xs">Comece digitalizando seu cartÃ£o de ponto para ver o resumo financeiro.</p>
                     </div>
                     <button onClick={() => setView('upload')} className="px-8 py-4 bg-zinc-900 text-white rounded-2xl font-bold shadow-xl shadow-zinc-200">
                       Digitalizar Agora
@@ -710,7 +772,7 @@ export default function App() {
                     </div>
                     <div className="space-y-2">
                       <h3 className="text-2xl font-bold text-zinc-900">Nenhum dado encontrado</h3>
-                      <p className="text-zinc-500 max-w-xs">Digitalize seu cartão para gerar a página de holerith.</p>
+                      <p className="text-zinc-500 max-w-xs">Digitalize seu cartÃ£o para gerar a pÃ¡gina de holerith.</p>
                     </div>
                     <button onClick={() => setView('upload')} className="px-8 py-4 bg-zinc-900 text-white rounded-2xl font-bold shadow-xl shadow-zinc-200">
                       Digitalizar Agora
@@ -746,6 +808,113 @@ export default function App() {
               existingEntries={entries}
               initialMonth={uploadContext?.month}
               initialIsOvertimeCard={uploadContext?.isOvertime}
+              onCreateFromHolerith={({ month, parsed, projected, updateMode }) => {
+                const normalizedMonth = normalizeMonthKey(month);
+                const [yearStr, monthStr] = normalizedMonth.split('-');
+                const refData = {
+                  employeeName: settings?.employeeName || parsed.employeeName || '',
+                  employeeCode: settings?.employeeCode || '',
+                  role: settings?.role || '',
+                  location: settings?.location || '',
+                  companyName: settings?.companyName || '',
+                  companyCnpj: settings?.companyCnpj || '',
+                  cardNumber: settings?.cardNumber || '',
+                  month: monthStr,
+                  year: Number(yearStr),
+                  hasNormalCard: true,
+                  hasOvertimeCard: true,
+                  hours: projected.hours,
+                  he: projected.he,
+                  frontImage: null,
+                  backImage: null,
+                  frontImageHe: null,
+                  backImageHe: null
+                };
+
+                setMonthData(refData);
+                setLocalProjectedByMonth((prev) => ({ ...prev, [normalizedMonth]: refData }));
+                setMonthCache((prev) => {
+                  const next = { ...prev, [normalizedMonth]: refData };
+                  const rebuiltMonths = Object.keys(next).sort().reverse();
+                  setEntries(rebuildEntriesFromCache(next, rebuiltMonths));
+                  return next;
+                });
+
+                setUploadContext({ month: normalizedMonth, isOvertime: false });
+                setPendingCardSaveMode(updateMode);
+                setSelectedMonth(normalizedMonth);
+                setView('card');
+                toast.success(`Cartão projetado carregado para ${normalizedMonth}.`);
+                if (projected.warnings.length > 0) {
+                  toast.warning(projected.warnings[0]);
+                }
+              }}
+              onSaveProjectedFromHolerith={async ({ month, parsed, projected, updateMode }) => {
+                const normalizedMonth = normalizeMonthKey(month);
+                const [yearStr, monthStr] = normalizedMonth.split('-');
+                const year = Number(yearStr);
+                const mm = String(monthStr).padStart(2, '0');
+                if (!year || !mm) throw new Error('Competência inválida para salvar predição.');
+
+                const payload = {
+                  companyName: settings?.companyName || '',
+                  companyCnpj: settings?.companyCnpj || '',
+                  employeeName: settings?.employeeName || parsed.employeeName || '',
+                  employeeCode: settings?.employeeCode || '',
+                  role: settings?.role || '',
+                  location: settings?.location || '',
+                  cardNumber: settings?.cardNumber || '',
+                  month: mm,
+                  year,
+                  hours: projected.hours.map((r) => ({
+                    date: r.date,
+                    day: r.day,
+                    entry1: r.entry1 || '',
+                    exit1: r.exit1 || '',
+                    entry2: r.entry2 || '',
+                    exit2: r.exit2 || '',
+                    entryExtra: r.entryExtra || '',
+                    exitExtra: r.exitExtra || '',
+                    totalHours: r.totalHours || '',
+                    isDPAnnotation: !!r.isDPAnnotation
+                  })),
+                  he: projected.he.map((r) => ({
+                    date: r.date,
+                    day: r.day,
+                    entry1: r.entry1 || '',
+                    exit1: r.exit1 || '',
+                    entry2: r.entry2 || '',
+                    exit2: r.exit2 || '',
+                    entryExtra: r.entryExtra || '',
+                    exitExtra: r.exitExtra || '',
+                    totalHours: r.totalHours || '',
+                    isDPAnnotation: !!r.isDPAnnotation
+                  })),
+                  frontImage: null,
+                  backImage: null,
+                  frontImageHe: null,
+                  backImageHe: null
+                };
+
+                if (updateMode === 'replace') {
+                  const ref = `${mm}${year}`;
+                  const delRes = await fetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
+                  if (!delRes.ok && delRes.status !== 404) {
+                    throw new Error(`Falha ao limpar competencia para substituicao (${delRes.status}).`);
+                  }
+                }
+
+                setSelectedMonth(`${year}-${mm}`);
+                await saveCard(payload, 'card');
+              }}
+              onCreateManual={({ month, isOvertimeCard, updateMode }) => {
+                const normalizedMonth = normalizeMonthKey(month);
+                setUploadContext({ month: normalizedMonth, isOvertime: isOvertimeCard });
+                setPendingCardSaveMode(updateMode);
+                setSelectedMonth(normalizedMonth);
+                setView('card');
+                toast.success(`Lançamento manual aberto para ${normalizedMonth}.`);
+              }}
               onProcessed={async (newEntries, metadata, options) => {
               try {
                 if (!Array.isArray(newEntries) || newEntries.length === 0) {
@@ -807,10 +976,10 @@ export default function App() {
                   if (provided && provided !== expected) normalizedDateCount++;
                 });
                 if (invalidDayCount > 0) {
-                  toast.warning(`${invalidDayCount} linha(s) com dia inválido foram ignoradas no mapeamento.`);
+                    toast.warning(`${invalidDayCount} linha(s) com dia inválido foram ignoradas no mapeamento.`);
                 }
                 if (normalizedDateCount > 0) {
-                  toast.warning(`${normalizedDateCount} data(s) do OCR foram normalizadas para a competência ${referenceKey}.`);
+                    toast.warning(`${normalizedDateCount} data(s) do OCR foram normalizadas para a competência ${referenceKey}.`);
                 }
                 
                 // Buscar dados existentes do mês para preservar o outro tipo de cartão
@@ -934,6 +1103,7 @@ export default function App() {
     </div>
   );
 }
+
 
 
 

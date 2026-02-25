@@ -2,7 +2,14 @@ import React from 'react';
 import { Printer } from 'lucide-react';
 import { format, parseISO, isValid } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { calculateOvertime, type Settings, type TimeEntry } from '../lib/calculations';
+import {
+  calculateOvertime,
+  normalizeOvernightEntries,
+  resolveDailyJourneyMinutes,
+  sumEntryWorkedMinutes,
+  type Settings,
+  type TimeEntry
+} from '../lib/calculations';
 import { calcularHoleriteCompleto } from '../lib/payroll';
 import { formatCurrency } from '../lib/utils';
 
@@ -38,16 +45,11 @@ export default function HolerithView({
   const data = React.useMemo(() => {
     if (!entries || entries.length === 0) return null;
 
-    const normals = normalEntries ?? entries.filter(e => !e.isOvertimeCard);
-    const overs = overtimeEntries ?? entries.filter(e => !!e.isOvertimeCard);
-    const calc = calculateOvertime(entries, settings);
+    const effectiveEntries = normalizeOvernightEntries(entries);
+    const normals = normalizeOvernightEntries(normalEntries ?? effectiveEntries.filter(e => !e.isOvertimeCard));
+    const overs = normalizeOvernightEntries(overtimeEntries ?? effectiveEntries.filter(e => !!e.isOvertimeCard));
+    const calc = calculateOvertime(effectiveEntries, settings);
     if (!calc) return null;
-
-    const toMin = (t: string) => {
-      if (!t || !t.includes(':')) return 0;
-      const [h, m] = t.split(':').map(Number);
-      return h * 60 + m;
-    };
 
     let totalAtrasoMinutes = 0;
     normals.forEach((entry) => {
@@ -55,27 +57,14 @@ export default function HolerithView({
       if (!isValid(date)) return;
       if (date.getDay() === 0) return;
 
-      const periods = [
-        [entry.entry1, entry.exit1],
-        [entry.entry2, entry.exit2],
-        [entry.entryExtra, entry.exitExtra]
-      ];
-
-      let dailyMinutes = 0;
-      periods.forEach(([s, e]) => {
-        if (!s || !e || !s.includes(':') || !e.includes(':')) return;
-        let d = toMin(e) - toMin(s);
-        if (d < 0) d += 24 * 60;
-        dailyMinutes += d;
-      });
-
-      let journey = (settings.dailyJourney || 0) * 60;
-      if (settings.saturdayCompensation) {
-        const day = date.getDay();
-        const compDays = (settings.compDays || '1,2,3,4').split(',').map(Number);
-        if (compDays.includes(day)) journey += 60;
-        else if (day === 6) journey = 0;
-      }
+      const dailyMinutes = sumEntryWorkedMinutes(entry);
+      const journey = resolveDailyJourneyMinutes(
+        settings.dailyJourney || 0,
+        !!entry.isOvertimeCard,
+        date.getDay(),
+        !!settings.saturdayCompensation,
+        settings.compDays
+      );
 
       if (entry.isDPAnnotation) return;
       if (dailyMinutes < journey && dailyMinutes > 0) totalAtrasoMinutes += (journey - dailyMinutes);
@@ -143,6 +132,7 @@ export default function HolerithView({
 
   const descontos = [
     { code: '514', desc: 'DESCONTO DE ATRASO', hours: (data.atrasoValor / (data.payroll.valores.valorHora || 1)), value: data.atrasoValor },
+    { code: '531', desc: 'DESCONTO D.S.R.', hours: null, value: data.payroll.valores.descontoDSRAtraso || 0 },
     { code: '535', desc: 'ADIANTAMENTO', hours: null, value: data.payroll.valores.adiantamentoBruto },
     { code: '987', desc: 'INSS', hours: null, value: data.payroll.valores.inss },
     { code: '989', desc: 'IRF S/ SALARIO', hours: null, value: data.payroll.valores.irRetidoNoFechamento },
@@ -255,7 +245,7 @@ export default function HolerithView({
           <div><span className="font-bold">Base FGTS:</span> {formatCurrency(fgtsBase)}</div>
           <div><span className="font-bold">FGTS:</span> {formatCurrency(fgtsValue)}</div>
           <div><span className="font-bold">Base IR:</span> {formatCurrency(data.payroll.valores.baseIR)}</div>
-          <div><span className="font-bold">Base INSS:</span> {formatCurrency(data.payroll.valores.totalProventos)}</div>
+          <div><span className="font-bold">Base INSS:</span> {formatCurrency(data.payroll.valores.baseINSS || data.payroll.valores.totalProventos)}</div>
           <div><span className="font-bold">Salário:</span> {formatCurrency(data.payroll.valores.salarioBase)}</div>
           <div><span className="font-bold">Carga Horária:</span> {(settings.monthlyHours || 220).toFixed(2)}</div>
         </div>
