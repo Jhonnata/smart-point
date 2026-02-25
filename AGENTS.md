@@ -1,5 +1,6 @@
 # AGENTS.md
 
+
 ## 1) Objetivo deste repositorio
 `smart-point` e um sistema de leitura e gestao de cartao de ponto com:
 - Frontend React (Vite) para upload, conferencia e resumo financeiro.

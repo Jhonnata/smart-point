@@ -1338,11 +1338,14 @@ export default function App() {
                 toast.error("Erro ao processar os dados do cartão.");
               }
             }} />}
+
             {view === 'settings' && <SettingsView settings={settings!} onSave={saveSettings} />}
           </motion.div>
         </AnimatePresence>
       </main>
+
       <Toaster position="top-right" richColors />
+
     </div>
   );
 }
