@@ -317,7 +317,7 @@ function parseEmployeeScope(code: string): { scopedUserId: number | null; rawCod
 function isEmployeeCodeOwnedByUser(code: string, userId: number): boolean {
   const { scopedUserId } = parseEmployeeScope(code);
   if (scopedUserId === userId) return true;
-  // Compatibilidade: registros legados sem escopo pertencem ao usuÃ¡rio administrador (id=1).
+  // Compatibilidade: registros legados sem escopo pertencem ao usuário administrador (id=1).
   if (scopedUserId === null && userId === 1) return true;
   return false;
 }
@@ -428,13 +428,28 @@ function normalizeAuthIdentifier(raw: any): string {
   return String(raw || "").trim().toLowerCase();
 }
 
+function normalizeOrigin(raw: string): string {
+  const value = String(raw || "").trim();
+  if (!value) return "";
+  try {
+    const parsed = new URL(value);
+    return `${parsed.protocol}//${parsed.host}`.toLowerCase();
+  } catch {
+    return value.replace(/\/+$/, "").toLowerCase();
+  }
+}
+
 function resolveAllowedOrigins(): Set<string> {
-  return new Set(
-    String(process.env.FRONTEND_ORIGIN || "")
-      .split(",")
-      .map((v) => v.trim())
-      .filter(Boolean)
-  );
+  const configured = String(process.env.FRONTEND_ORIGIN || "")
+    .split(",")
+    .map((v) => normalizeOrigin(v))
+    .filter(Boolean);
+
+  if (configured.length === 0) {
+    configured.push("https://jhonnata.github.io");
+  }
+
+  return new Set(configured);
 }
 
 function resolveCookieSameSite(): "Lax" | "Strict" | "None" {
@@ -577,7 +592,7 @@ try {
     db.prepare("UPDATE holeriths SET employee_id = ? WHERE employee_id IS NULL").run(empId);
   }
 } catch (e) {
-  // Ignora erro se a coluna jÃ¡ tiver NOT NULL ou dados corretos
+  // Ignora erro se a coluna já tiver NOT NULL ou dados corretos
 }
 
 function clampCycleStartDay(raw: any): number {
@@ -843,8 +858,9 @@ async function startServer() {
   const allowedOrigins = resolveAllowedOrigins();
 
   app.use((req, res, next) => {
-    const origin = String(req.headers.origin || "");
-    const allowOrigin = origin && allowedOrigins.has(origin) ? origin : "";
+    const originHeader = String(req.headers.origin || "");
+    const normalizedOrigin = normalizeOrigin(originHeader);
+    const allowOrigin = normalizedOrigin && allowedOrigins.has(normalizedOrigin) ? originHeader : "";
 
     if (allowOrigin) {
       res.header("Access-Control-Allow-Origin", allowOrigin);
@@ -1183,11 +1199,11 @@ async function startServer() {
     }
   });
 
-  // POST /api/referencia/:ref â€” salva dados do cartÃ£o (normal + horas extras) para um mÃªs
+  // POST /api/referencia/:ref - salva dados do cartao (normal + horas extras) para um mes
   app.post("/api/referencia/:ref", (req, res) => {
     const { ref } = req.params;
     if (!ref || ref.length !== 6) {
-      return res.status(400).json({ error: "ReferÃªncia invÃ¡lida. Use MMYYYY." });
+      return res.status(400).json({ error: "Referência inválida. Use MMYYYY." });
     }
     const month = parseInt(ref.substring(0, 2), 10);
     const year = parseInt(ref.substring(2), 10);
@@ -1269,7 +1285,7 @@ async function startServer() {
           snapshot_companyName = ?, snapshot_companyCnpj = ?, snapshot_cardNumber = ?, updatedAt = datetime('now')
           WHERE id = ?`).run(eName, eCodeRaw, body.role || null, body.location || null, cName, cCnpj || null, body.cardNumber || null, h.id);
 
-        // 4. Atualizar defaultEmployeeId / defaultCompanyId nas settings se necessÃ¡rio
+        // 4. Atualizar defaultEmployeeId / defaultCompanyId nas settings se necessário
         if (!getSafeDefaultEmployeeId(userId) && employeeId) {
           db.prepare("UPDATE settings SET defaultEmployeeId = ? WHERE id = ?").run(employeeId, userId);
         }
@@ -1394,14 +1410,14 @@ async function startServer() {
     const { ref } = req.params;
 
     if (!ref || ref.length !== 6) {
-      return res.status(400).json({ error: "ReferÃªncia invÃ¡lida. Use MMYYYY." });
+      return res.status(400).json({ error: "Referência inválida. Use MMYYYY." });
     }
     const month = parseInt(ref.substring(0, 2), 10);
     const year = parseInt(ref.substring(2), 10);
 
     console.log(`[DEBUG] GET /api/referencia/${ref} -> month=${month}, year=${year}`);
 
-    // Obter funcionÃ¡rio padrÃ£o (ou do holerith se existissem mÃºltiplos, mas o app foca em um)
+    // Obter funcionário padrão (ou do holerith se existissem múltiplos, mas o app foca em um)
     const userId = Number((req as any).authUser?.id || 0);
     ensureSettingsForUser(userId);
     const employeeId = getSafeDefaultEmployeeId(userId);
@@ -1440,7 +1456,7 @@ async function startServer() {
       marcacoes = db.prepare("SELECT type, frontImage, backImage FROM marcacoes WHERE holerith_id = ?").all(h.id) as any[];
     }
 
-    // Garantir 31 dias preenchidos em cada cartÃ£o com base no ciclo de fechamento
+    // Garantir 31 dias preenchidos em cada cartão com base no ciclo de fechamento
     const sRow: any = db.prepare("SELECT cycleStartDay FROM settings WHERE id = ?").get(userId);
     const cycleStartDay = clampCycleStartDay(sRow?.cycleStartDay);
 
@@ -1520,7 +1536,7 @@ async function startServer() {
       const { ref } = req.params;
       const type = String(req.query.type || 'all');
       if (!ref || ref.length !== 6) {
-        return res.status(400).json({ error: "ReferÃªncia invÃ¡lida. Use MMYYYY." });
+        return res.status(400).json({ error: "Referência inválida. Use MMYYYY." });
       }
 
       const month = parseInt(ref.substring(0, 2), 10);
@@ -1627,7 +1643,5 @@ async function startServer() {
 }
 
 startServer();
-
-
 
 
