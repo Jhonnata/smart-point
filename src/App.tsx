@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   Settings as SettingsIcon, 
@@ -825,7 +825,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#F8F9FA] flex flex-col md:flex-row font-sans selection:bg-zinc-900 selection:text-white">
       {/* Mobile Header */}
-      <div className="md:hidden bg-white border-b border-zinc-100 px-4 h-16 flex items-center justify-between sticky top-0 z-50">
+      <div className="md:hidden bg-white border-b border-zinc-100 px-4 h-14 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-zinc-900 rounded-lg flex items-center justify-center">
             <PlusCircle className="w-5 h-5 text-white" />
@@ -837,9 +837,19 @@ export default function App() {
         </button>
       </div>
 
+      {/* Mobile Backdrop */}
+      {isMenuOpen && (
+        <button
+          type="button"
+          aria-label="Fechar menu"
+          className="md:hidden fixed inset-0 bg-zinc-950/35 z-40"
+          onClick={() => setIsMenuOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
       <aside className={cn(
-        "fixed inset-0 z-40 bg-white border-r border-zinc-100 transition-transform md:relative md:translate-x-0 w-72 flex flex-col",
+        "fixed inset-y-0 left-0 z-50 bg-white border-r border-zinc-100 transition-transform md:relative md:translate-x-0 w-[88vw] max-w-72 md:w-72 flex flex-col pt-14 md:pt-0",
         isMenuOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <div className="p-8 hidden md:block">
@@ -896,10 +906,10 @@ export default function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 p-4 md:p-12 overflow-y-auto">
+      <main className="flex-1 p-3 sm:p-4 md:p-10 overflow-y-auto">
         {/* Month Selector & Header */}
-        <div className="mb-8 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <h2 className="text-3xl font-black text-zinc-900 tracking-tighter">
+        <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6">
+          <h2 className="text-2xl sm:text-3xl font-black text-zinc-900 tracking-tighter leading-tight">
             {view === 'dashboard' ? 'Dashboard Geral' : 
              view === 'resumo' ? 'Painel de Resumo' :
              view === 'holerith' ? 'Holerith' : 
@@ -909,12 +919,12 @@ export default function App() {
           </h2>
           
           {(view === 'resumo' || view === 'dashboard' || view === 'holerith') && availableMonths.length > 0 && (
-            <div className="flex items-center gap-3 bg-white p-2 rounded-2xl border border-zinc-100 shadow-sm">
-              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest pl-3">Mês de Referência:</span>
+            <div className="w-full md:w-auto flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 bg-white p-2 rounded-2xl border border-zinc-100 shadow-sm">
+              <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest pl-2 sm:pl-3">Mês de Referência:</span>
               <select 
                 value={selectedMonth}
                 onChange={(e) => setSelectedMonth(e.target.value)}
-                className="bg-zinc-50 border-none rounded-xl font-bold text-sm focus:ring-2 focus:ring-zinc-900 pr-10"
+                className="w-full sm:w-auto bg-zinc-50 border-none rounded-xl font-bold text-sm focus:ring-2 focus:ring-zinc-900 pr-10 min-w-0 sm:min-w-[180px]"
               >
                 {availableMonths.map(m => {
                   const dateObj = parseISO(m + '-01');
@@ -931,19 +941,19 @@ export default function App() {
 
         {/* Card Header Info */}
         {filteredEntries.length > 0 && (view === 'resumo' || view === 'card' || view === 'holerith') && (
-          <div className="mb-12 bg-white p-8 rounded-[2rem] border border-zinc-100 shadow-sm flex flex-wrap gap-8">
-            <div className="flex-1 min-w-[200px]">
+          <div className="mb-8 sm:mb-12 bg-white p-4 sm:p-6 md:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm flex flex-wrap gap-5 sm:gap-8">
+            <div className="flex-1 min-w-0 sm:min-w-[200px]">
               <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Funcionário</div>
-              <div className="text-xl font-black text-zinc-900">{currentMetadata.employeeName || 'Não identificado'}</div>
-              <div className="text-xs font-bold text-zinc-500 uppercase">
+              <div className="text-lg sm:text-xl font-black text-zinc-900 break-words">{currentMetadata.employeeName || 'Não identificado'}</div>
+              <div className="text-[11px] sm:text-xs font-bold text-zinc-500 uppercase break-words">
                 {currentMetadata.role || 'Cargo não identificado'} • {currentMetadata.employeeCode || 'Cod: --'}
               </div>
             </div>
-      <div className="flex-1 min-w-[200px]">
+      <div className="flex-1 min-w-0 sm:min-w-[200px]">
         <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Empresa</div>
-        <div className="text-xl font-black text-zinc-900">{currentMetadata.companyName || 'Empresa não identificada'}</div>
-        <div className="flex items-center gap-2 mt-1">
-          <div className="text-xs font-bold text-zinc-500 uppercase">{currentMetadata.location || 'Local: --'}</div>
+        <div className="text-lg sm:text-xl font-black text-zinc-900 break-words">{currentMetadata.companyName || 'Empresa não identificada'}</div>
+        <div className="flex flex-wrap items-center gap-2 mt-1">
+          <div className="text-[11px] sm:text-xs font-bold text-zinc-500 uppercase">{currentMetadata.location || 'Local: --'}</div>
           {currentMetadata.isOvertimeCard && (
             <span className="px-2 py-0.5 bg-red-100 text-red-600 text-[8px] font-black uppercase rounded-full border border-red-200">
               Cartão de Horas Extras
@@ -954,10 +964,10 @@ export default function App() {
             <div className="w-px bg-zinc-100 hidden lg:block" />
             <div>
               <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Período</div>
-              <div className="text-xl font-black text-zinc-900">
+              <div className="text-lg sm:text-xl font-black text-zinc-900">
                 {currentMetadata.month || '--'} {currentMetadata.year || ''}
               </div>
-              <div className="text-xs font-bold text-zinc-500 uppercase">Cartão: {currentMetadata.cardNumber || '--'}</div>
+              <div className="text-[11px] sm:text-xs font-bold text-zinc-500 uppercase">Cartão: {currentMetadata.cardNumber || '--'}</div>
             </div>
           </div>
         )}
@@ -1349,7 +1359,6 @@ export default function App() {
     </div>
   );
 }
-
 
 
 

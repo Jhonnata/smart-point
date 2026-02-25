@@ -45,7 +45,7 @@ export default function SettingsView({ settings, onSave }: Props) {
         setGeminiModels(models);
         if (!silent) toast.success(`${models.length} modelos Gemini carregados`);
       } else {
-        if (!silent) toast.error("Nenhum modelo Gemini encontrado ou chave inválida");
+        if (!silent) toast.error("Nenhum modelo Gemini encontrado ou chave invÃ¡lida");
       }
     } catch (err) {
       if (!silent) toast.error("Erro ao buscar modelos Gemini");
@@ -66,7 +66,7 @@ export default function SettingsView({ settings, onSave }: Props) {
         setOpenaiModels(models);
         if (!silent) toast.success(`${models.length} modelos OpenAI carregados`);
       } else {
-        if (!silent) toast.error("Nenhum modelo OpenAI encontrado ou chave inválida");
+        if (!silent) toast.error("Nenhum modelo OpenAI encontrado ou chave invÃ¡lida");
       }
     } catch (err) {
       if (!silent) toast.error("Erro ao buscar modelos OpenAI");
@@ -113,29 +113,29 @@ export default function SettingsView({ settings, onSave }: Props) {
   };
 
   return (
-    <div className="max-w-2xl mx-auto p-6 bg-white rounded-3xl shadow-sm border border-zinc-100 space-y-8">
+    <div className="max-w-2xl mx-auto p-4 sm:p-6 bg-white rounded-3xl shadow-sm border border-zinc-100 space-y-6 sm:space-y-8">
       <div className="flex items-center gap-3 border-b border-zinc-50 pb-4">
         <div className="p-2 bg-zinc-100 rounded-xl">
           <SettingsIcon className="w-6 h-6 text-zinc-600" />
         </div>
         <div>
-          <h2 className="text-xl font-bold text-zinc-900">Configurações</h2>
-          <p className="text-sm text-zinc-500">Ajuste as regras de cálculo e valores</p>
+          <h2 className="text-xl font-bold text-zinc-900">ConfiguraÃ§Ãµes</h2>
+          <p className="text-sm text-zinc-500">Ajuste as regras de cÃ¡lculo e valores</p>
         </div>
       </div>
 
       {/* Tabs Navigation */}
-      <div className="flex p-1 bg-zinc-100 rounded-2xl gap-1">
+      <div className="grid grid-cols-3 p-1 bg-zinc-100 rounded-2xl gap-1">
         {[
           { id: 'financeiro', label: 'Financeiro', icon: DollarSign },
           { id: 'ia', label: 'IA', icon: Bot },
-          { id: 'funcionario', label: 'Funcionário', icon: User }
+          { id: 'funcionario', label: 'FuncionÃ¡rio', icon: User }
         ].map(tab => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id as any)}
             className={cn(
-              "flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all",
+              "flex items-center justify-center gap-1 sm:gap-2 py-2.5 sm:py-3 rounded-xl font-bold text-xs sm:text-sm transition-all",
               activeTab === tab.id 
                 ? "bg-white text-zinc-900 shadow-sm" 
                 : "text-zinc-400 hover:text-zinc-600"
@@ -152,7 +152,7 @@ export default function SettingsView({ settings, onSave }: Props) {
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-zinc-700">Salário Base</label>
+                <label className="text-sm font-semibold text-zinc-700">SalÃ¡rio Base</label>
                 <input 
                   type="text" 
                   inputMode="decimal"
@@ -182,7 +182,7 @@ export default function SettingsView({ settings, onSave }: Props) {
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-zinc-700">Jornada Diária (Horas)</label>
+                <label className="text-sm font-semibold text-zinc-700">Jornada DiÃ¡ria (Horas)</label>
                 <input 
                   type="number" 
                   value={localSettings.dailyJourney}
@@ -200,7 +200,7 @@ export default function SettingsView({ settings, onSave }: Props) {
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-semibold text-zinc-700">Início Adicional Noturno</label>
+                <label className="text-sm font-semibold text-zinc-700">InÃ­cio Adicional Noturno</label>
                 <input 
                   type="text" 
                   value={localSettings.nightCutoff}
@@ -211,7 +211,7 @@ export default function SettingsView({ settings, onSave }: Props) {
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-4 pt-4 border-t border-zinc-50">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t border-zinc-50">
               <div className="space-y-2">
                 <label className="text-xs font-bold text-zinc-500 uppercase">Adicional 1 (%)</label>
                 <input 
@@ -244,7 +244,7 @@ export default function SettingsView({ settings, onSave }: Props) {
             <div className="pt-6 border-t border-zinc-50 space-y-4">
               <h3 className="text-sm font-bold text-zinc-900 uppercase tracking-widest flex items-center gap-2">
                 <DollarSign className="w-4 h-4 text-zinc-400" />
-                Dados de Folha / Holerite (Deduções)
+                Dados de Folha / Holerite (DeduÃ§Ãµes)
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="space-y-2">
@@ -279,9 +279,9 @@ export default function SettingsView({ settings, onSave }: Props) {
                   <div className="flex items-center justify-between">
                     <div className="space-y-1">
                       <label htmlFor="saturdayCompensation" className="text-sm font-black text-zinc-900 cursor-pointer uppercase tracking-tighter">
-                        Compensação de Sábado
+                        CompensaÃ§Ã£o de SÃ¡bado
                       </label>
-                      <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Zerar jornada aos sábados</p>
+                      <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Zerar jornada aos sÃ¡bados</p>
                     </div>
                     <button
                       type="button"
@@ -304,7 +304,7 @@ export default function SettingsView({ settings, onSave }: Props) {
                       <div className="flex flex-wrap gap-2">
                         {[
                           { label: 'Segunda', short: 'Seg', value: 1 },
-                          { label: 'Terça', short: 'Ter', value: 2 },
+                          { label: 'TerÃ§a', short: 'Ter', value: 2 },
                           { label: 'Quarta', short: 'Qua', value: 3 },
                           { label: 'Quinta', short: 'Qui', value: 4 },
                           { label: 'Sexta', short: 'Sex', value: 5 },
@@ -339,7 +339,7 @@ export default function SettingsView({ settings, onSave }: Props) {
                   )}
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold text-zinc-700">Início do Ciclo (Dia)</label>
+                  <label className="text-sm font-semibold text-zinc-700">InÃ­cio do Ciclo (Dia)</label>
                   <input 
                     type="number" 
                     min="1"
@@ -347,13 +347,13 @@ export default function SettingsView({ settings, onSave }: Props) {
                     value={localSettings.cycleStartDay || 15}
                     onChange={e => handleChange('cycleStartDay', Number(e.target.value))}
                     className="w-full px-4 py-2 rounded-xl border border-zinc-200 focus:ring-2 focus:ring-emerald-500 outline-none"
-                    placeholder="Padrão: 15"
+                    placeholder="PadrÃ£o: 15"
                   />
                   <p className="text-[10px] text-zinc-400 italic">Ex: 16 para ciclo de 16 a 15</p>
                 </div>
               </div>
               <p className="text-[10px] text-zinc-400 italic">
-                * Se o adiantamento for 0, o sistema calculará automaticamente 45% do salário base para fins de simulação.
+                * Se o adiantamento for 0, o sistema calcularÃ¡ automaticamente 45% do salÃ¡rio base para fins de simulaÃ§Ã£o.
               </p>
             </div>
           </div>
@@ -363,7 +363,7 @@ export default function SettingsView({ settings, onSave }: Props) {
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2 duration-300">
             <div className="flex items-center gap-2 mb-4">
               <Bot className="w-5 h-5 text-zinc-400" />
-              <h3 className="text-sm font-bold text-zinc-900 uppercase tracking-widest">Inteligência Artificial</h3>
+              <h3 className="text-sm font-bold text-zinc-900 uppercase tracking-widest">InteligÃªncia Artificial</h3>
             </div>
 
             <div className="space-y-2">
@@ -495,12 +495,12 @@ export default function SettingsView({ settings, onSave }: Props) {
             <div className="space-y-6">
               <div className="flex items-center gap-2">
                 <User className="w-5 h-5 text-zinc-400" />
-                <h3 className="text-sm font-bold text-zinc-900 uppercase tracking-widest">Dados do Funcionário</h3>
+                <h3 className="text-sm font-bold text-zinc-900 uppercase tracking-widest">Dados do FuncionÃ¡rio</h3>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold text-zinc-700">Nome do Funcionário</label>
+                  <label className="text-sm font-semibold text-zinc-700">Nome do FuncionÃ¡rio</label>
                   <input 
                     type="text" 
                     value={localSettings.employeeName || ''}
@@ -510,7 +510,7 @@ export default function SettingsView({ settings, onSave }: Props) {
                   />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold text-zinc-700">Código/Matrícula</label>
+                  <label className="text-sm font-semibold text-zinc-700">CÃ³digo/MatrÃ­cula</label>
                   <input 
                     type="text" 
                     value={localSettings.employeeCode || ''}
@@ -636,7 +636,7 @@ export default function SettingsView({ settings, onSave }: Props) {
                   />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold text-zinc-700">Número do Cartão</label>
+                  <label className="text-sm font-semibold text-zinc-700">NÃºmero do CartÃ£o</label>
                   <input 
                     type="text" 
                     value={localSettings.cardNumber || ''}
@@ -656,7 +656,7 @@ export default function SettingsView({ settings, onSave }: Props) {
         className="w-full py-4 bg-zinc-900 text-white rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-zinc-800 transition-all shadow-lg shadow-zinc-200"
       >
         <Save className="w-5 h-5" />
-        Salvar Configurações
+        Salvar ConfiguraÃ§Ãµes
       </button>
     </div>
   );

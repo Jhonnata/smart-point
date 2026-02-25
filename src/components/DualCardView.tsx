@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { ArrowLeft, Save, Upload, Calendar, Clock } from 'lucide-react';
 import { differenceInCalendarDays, parseISO, isValid } from 'date-fns';
 import { toast } from 'sonner';
@@ -518,9 +518,9 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
   );
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+    <div className="space-y-6 sm:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       {/* Header Area (sem a faixa preta) */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 bg-white p-8 rounded-[2rem] border border-zinc-100 shadow-sm">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6 bg-white p-4 sm:p-6 md:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm">
         <div className="flex items-center gap-4">
           {onBack && (
             <button 
@@ -535,7 +535,7 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
               <Calendar className="w-3 h-3" />
               Conferência de Registros
             </div>
-            <div className="text-2xl font-black text-zinc-900 tracking-tighter italic">Lançamento Consolidado</div>
+            <div className="text-xl sm:text-2xl font-black text-zinc-900 tracking-tighter italic">Lançamento Consolidado</div>
             {competenciaPeriodLabel && (
               <div className="text-[11px] font-semibold text-zinc-500 mt-1">{competenciaPeriodLabel}</div>
             )}
@@ -545,14 +545,14 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
         <button 
           onClick={commit} 
           disabled={!!disableSave}
-          className="px-8 py-4 bg-zinc-900 text-white rounded-2xl font-bold flex items-center gap-3 shadow-xl shadow-zinc-200 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:active:scale-100"
+          className="w-full md:w-auto px-5 sm:px-8 py-3.5 sm:py-4 bg-zinc-900 text-white rounded-2xl font-bold flex items-center justify-center gap-3 shadow-xl shadow-zinc-200 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:active:scale-100"
         >
           <Save className="w-5 h-5"/> {disableSave ? 'Carregando mês...' : 'Salvar Alterações'}
         </button>
       </div>
 
       {/* Grid de Tabelas */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-8">
         {renderTable(left, 'left')}
         {renderTable(right, 'right')}
       </div>

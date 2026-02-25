@@ -1,4 +1,4 @@
-﻿import React from 'react';
+import React from 'react';
 import { DollarSign, TrendingUp, Clock, Calendar, Printer, AlertTriangle, ChevronDown, ChevronUp, FileText, Calculator } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { format, parseISO, isValid } from 'date-fns';
@@ -142,7 +142,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
 
   if (!results) {
     return (
-      <div className="p-12 text-center bg-white rounded-[2rem] border border-zinc-100 flex flex-col items-center gap-4">
+      <div className="p-6 sm:p-12 text-center bg-white rounded-3xl md:rounded-[2rem] border border-zinc-100 flex flex-col items-center gap-4">
         <div className="w-16 h-16 bg-zinc-50 rounded-full flex items-center justify-center">
           <Clock className="w-8 h-8 text-zinc-300" />
         </div>
@@ -156,7 +156,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
 
   if (results.weeklySummaries.length === 0) {
     return (
-      <div className="p-12 text-center bg-white rounded-[2rem] border border-zinc-100 flex flex-col items-center gap-4">
+      <div className="p-6 sm:p-12 text-center bg-white rounded-3xl md:rounded-[2rem] border border-zinc-100 flex flex-col items-center gap-4">
         <div className="w-16 h-16 bg-zinc-50 rounded-full flex items-center justify-center">
           <Calendar className="w-8 h-8 text-zinc-300" />
         </div>
@@ -184,13 +184,13 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
   }));
 
   return (
-    <div className="space-y-8 print:p-0">
-      <div className="flex flex-col md:flex-row md:items-center justify-between mb-8 gap-6 print:hidden">
-        <div className="flex p-1 bg-zinc-100 rounded-2xl w-fit">
+    <div className="space-y-6 sm:space-y-8 print:p-0">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between mb-6 sm:mb-8 gap-4 sm:gap-6 print:hidden">
+        <div className="grid grid-cols-2 sm:flex p-1 bg-zinc-100 rounded-2xl w-full lg:w-fit gap-1">
           <button 
             onClick={() => setActiveView('financeiro')}
             className={cn(
-              "px-6 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2",
+              "px-3 sm:px-6 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-2",
               activeView === 'financeiro' ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
             )}
           >
@@ -200,7 +200,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
           <button 
             onClick={() => setActiveView('extras')}
             className={cn(
-              "px-6 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2",
+              "px-3 sm:px-6 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-2",
               activeView === 'extras' ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
             )}
           >
@@ -210,7 +210,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
           <button
             onClick={() => setActiveView('lancamentos')}
             className={cn(
-              "px-6 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2",
+              "px-3 sm:px-6 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-2",
               activeView === 'lancamentos' ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
             )}
           >
@@ -220,7 +220,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
           <button
             onClick={() => setActiveView('simulador')}
             className={cn(
-              "px-6 py-2.5 rounded-xl font-bold text-sm transition-all flex items-center gap-2",
+              "px-3 sm:px-6 py-2.5 rounded-xl font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-2",
               activeView === 'simulador' ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-700"
             )}
           >
@@ -232,7 +232,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
         {(activeView === 'financeiro' || activeView === 'extras') && (
           <button 
             onClick={handlePrint}
-            className="flex items-center gap-2 px-6 py-3 bg-white border border-zinc-100 rounded-2xl font-bold text-zinc-600 hover:bg-zinc-50 transition-all shadow-sm w-fit"
+            className="flex items-center justify-center gap-2 px-6 py-3 bg-white border border-zinc-100 rounded-2xl font-bold text-zinc-600 hover:bg-zinc-50 transition-all shadow-sm w-full sm:w-fit"
           >
             <Printer className="w-5 h-5" />
             Exportar PDF
@@ -243,35 +243,35 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
       {activeView === 'financeiro' ? (
         <div className="space-y-8 animate-in fade-in slide-in-from-left-4 duration-500">
           {/* Main Stats: Holerite Summary */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <div className="bg-zinc-900 p-8 rounded-[2rem] text-white shadow-xl shadow-zinc-200 relative overflow-hidden md:col-span-2">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+        <div className="bg-zinc-900 p-5 sm:p-8 rounded-3xl md:rounded-[2rem] text-white shadow-xl shadow-zinc-200 relative overflow-hidden md:col-span-2">
           <div className="relative z-10 flex flex-col h-full justify-between">
             <div>
               <div className="flex items-center gap-2 text-zinc-400 text-xs font-bold uppercase tracking-widest mb-4">
                 <DollarSign className="w-4 h-4" />
                 Líquido Final a Receber (Fechamento)
               </div>
-              <div className="text-7xl font-black mb-2 tracking-tighter italic">{formatCurrency(payroll.valores.liquido)}</div>
-              <div className="text-zinc-400 text-sm font-bold flex items-center gap-2">
+              <div className="text-4xl sm:text-5xl lg:text-7xl font-black mb-2 tracking-tighter italic break-words">{formatCurrency(payroll.valores.liquido)}</div>
+              <div className="text-zinc-400 text-xs sm:text-sm font-bold flex items-center gap-2">
                 <TrendingUp className="w-4 h-4 text-emerald-400" />
                 Total Recebido no Mês: {formatCurrency(payroll.valores.liquidoTotalRecebido)}
               </div>
             </div>
-            <div className="flex gap-8 pt-6 border-t border-white/10 mt-8">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8 pt-6 border-t border-white/10 mt-6 sm:mt-8">
               <div>
                 <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Total Proventos</div>
-                <div className="text-2xl font-black text-emerald-400">{formatCurrency(payroll.valores.totalProventos)}</div>
+                <div className="text-xl sm:text-2xl font-black text-emerald-400 break-words">{formatCurrency(payroll.valores.totalProventos)}</div>
               </div>
               <div>
                 <div className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest">Total Descontos</div>
-                <div className="text-2xl font-black text-rose-400">-{formatCurrency(payroll.valores.totalDescontos)}</div>
+                <div className="text-xl sm:text-2xl font-black text-rose-400 break-words">-{formatCurrency(payroll.valores.totalDescontos)}</div>
               </div>
             </div>
           </div>
           <div className="absolute -right-8 -bottom-8 w-60 h-60 bg-emerald-500/10 rounded-full blur-3xl" />
         </div>
 
-        <div className="bg-white p-8 rounded-[2rem] border border-zinc-100 shadow-sm flex flex-col justify-between">
+        <div className="bg-white p-5 sm:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm flex flex-col justify-between">
           <div>
             <div className="flex items-center gap-2 text-zinc-400 text-xs font-bold uppercase tracking-widest mb-6">
               <Clock className="w-4 h-4" />
@@ -311,8 +311,8 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
 
       {/* Collapsible Details */}
       {showDetails && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-in slide-in-from-top-4 duration-300">
-          <div className="bg-white p-8 rounded-[2rem] border border-zinc-100 shadow-sm">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-8 animate-in slide-in-from-top-4 duration-300">
+          <div className="bg-white p-5 sm:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm">
             <h3 className="text-sm font-bold text-zinc-900 uppercase tracking-widest mb-6 border-b border-zinc-50 pb-4">Detalhamento de Proventos</h3>
             <div className="space-y-4">
               <div className="flex justify-between items-center">
@@ -352,7 +352,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
             </div>
           </div>
 
-          <div className="bg-white p-8 rounded-[2rem] border border-zinc-100 shadow-sm">
+          <div className="bg-white p-5 sm:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm">
             <h3 className="text-sm font-bold text-zinc-900 uppercase tracking-widest mb-6 border-b border-zinc-50 pb-4">Detalhamento de Descontos</h3>
             <div className="space-y-4">
               <div className="flex justify-between items-center">
@@ -395,8 +395,8 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
          {/* Reutilizar cabeçalho de impressão existente no arquivo */}
       </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <div className="bg-white p-8 rounded-[2rem] border border-zinc-100 shadow-sm">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-8">
+            <div className="bg-white p-5 sm:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm">
               <h3 className="text-lg font-bold text-zinc-900 mb-6 italic tracking-tight">Evolução Semanal de Extras (R$)</h3>
               <div className="h-[300px]">
                 <ResponsiveContainer width="100%" height="100%">
@@ -418,11 +418,11 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
               </div>
             </div>
 
-            <div className="space-y-4">
-              <h3 className="text-lg font-bold text-zinc-900 italic tracking-tight">Resumo por Semana</h3>
+              <div className="space-y-3 sm:space-y-4">
+                <h3 className="text-lg font-bold text-zinc-900 italic tracking-tight">Resumo por Semana</h3>
               {results.weeklySummaries.map((week, i) => (
-                <div key={i} className="bg-white p-6 rounded-2xl border border-zinc-100 flex items-center justify-between group hover:border-emerald-500 transition-all">
-                  <div className="flex items-center gap-4">
+                <div key={i} className="bg-white p-4 sm:p-6 rounded-2xl border border-zinc-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 group hover:border-emerald-500 transition-all">
+                  <div className="flex items-center gap-3 sm:gap-4">
                     <div className="w-12 h-12 bg-zinc-50 rounded-xl flex items-center justify-center text-zinc-400 group-hover:bg-emerald-50 group-hover:text-emerald-500 transition-all">
                       <Calendar className="w-6 h-6" />
                     </div>
@@ -435,7 +435,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
                     </div>
                     </div>
                   </div>
-                  <div className="text-right">
+                  <div className="text-left sm:text-right">
                     <div className="text-lg font-black text-zinc-900">{formatCurrency(week.totalValue)}</div>
                     <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-tighter">
                       {formatMinutesAsHoursClock((week as any).total50Minutes ?? hoursToMinutes(week.total50))} | {formatMinutesAsHoursClock((week as any).total100Minutes ?? hoursToMinutes(week.total100))} | {formatMinutesAsHoursClock((week as any).total125Minutes ?? hoursToMinutes(week.total125))}
@@ -448,8 +448,8 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
         </div>
       ) : activeView === 'extras' ? (
         <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
-          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-            <div className="bg-white p-8 rounded-[2rem] border border-zinc-100 shadow-sm lg:col-span-1">
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 sm:gap-6">
+            <div className="bg-white p-5 sm:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm lg:col-span-1">
               <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-6">Taxas Aplicadas</h3>
               <div className="space-y-4">
                 <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
@@ -479,10 +479,10 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
             </div>
 
             <div className="lg:col-span-3 space-y-6">
-              <div className="bg-white p-8 rounded-[2rem] border border-zinc-100 shadow-sm">
+              <div className="bg-white p-5 sm:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm">
                 <h3 className="text-lg font-black text-zinc-900 italic tracking-tight mb-6">Detalhamento Diário de Horas Extras</h3>
                 <div className="overflow-x-auto">
-                  <table className="w-full">
+                  <table className="w-full min-w-[760px]">
                     <thead>
                       <tr className="text-left border-b border-zinc-100">
                         <th className="pb-4 text-[10px] font-black text-zinc-400 uppercase tracking-widest">Data</th>

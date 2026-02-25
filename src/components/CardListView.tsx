@@ -36,7 +36,7 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
       !!(e.entryExtra || '').trim() ||
       !!(e.exitExtra || '').trim();
 
-    // Conta dias únicos da competência (01..31), evitando duplicidade entre cartão normal e extra.
+    // Conta dias Ãºnicos da competÃªncia (01..31), evitando duplicidade entre cartÃ£o normal e extra.
     const uniqueDays = new Set(
       monthEntries
         .filter(hasAnyTime)
@@ -48,7 +48,7 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
       {availableMonths.map(month => {
         const meta = getMonthMetadata(month) as TimeEntry;
         const stats = getMonthStats(month);
@@ -58,12 +58,12 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
         return (
           <div 
             key={month}
-            className="bg-white rounded-[2rem] border border-zinc-100 shadow-sm hover:shadow-xl hover:shadow-zinc-200 transition-all group overflow-hidden flex flex-col"
+            className="bg-white rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm hover:shadow-xl hover:shadow-zinc-200 transition-all group overflow-hidden flex flex-col"
           >
-            <div className="p-8 flex-1">
+            <div className="p-5 sm:p-8 flex-1">
               <div className="flex items-start justify-between mb-6">
-                <div className="w-14 h-14 bg-zinc-900 rounded-2xl flex items-center justify-center shadow-lg shadow-zinc-200">
-                  <Calendar className="w-7 h-7 text-white" />
+                <div className="w-12 h-12 sm:w-14 sm:h-14 bg-zinc-900 rounded-2xl flex items-center justify-center shadow-lg shadow-zinc-200">
+                  <Calendar className="w-6 h-6 sm:w-7 sm:h-7 text-white" />
                 </div>
                 <button 
                   onClick={(e) => {
@@ -77,11 +77,11 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
               </div>
 
               <div className="space-y-1 mb-6">
-                <h3 className="text-2xl font-black text-zinc-900 tracking-tighter capitalize">
+                <h3 className="text-xl sm:text-2xl font-black text-zinc-900 tracking-tighter capitalize">
                   {isValidDate ? format(dateObj, 'MMMM yyyy', { locale: ptBR }) : month}
                 </h3>
                 <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">
-                  Cartão: {meta.cardNumber || '--'}
+                  CartÃ£o: {meta.cardNumber || '--'}
                 </p>
               </div>
 
@@ -94,7 +94,7 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
                   </div>
                 </div>
                 <div className="bg-zinc-50 p-4 rounded-2xl">
-                  <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Mídia</div>
+                  <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">MÃ­dia</div>
                   <div className="flex items-center gap-2">
                     <div className={cn(
                       "w-2 h-2 rounded-full",
@@ -111,11 +111,11 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
 
             <button 
               onClick={() => onSelectMonth(month)}
-              className="w-full p-6 bg-zinc-50 border-t border-zinc-100 flex items-center justify-between font-bold text-zinc-900 hover:bg-zinc-900 hover:text-white transition-all group-hover:bg-zinc-900 group-hover:text-white"
+              className="w-full p-4 sm:p-6 bg-zinc-50 border-t border-zinc-100 flex items-center justify-between font-bold text-sm sm:text-base text-zinc-900 hover:bg-zinc-900 hover:text-white transition-all group-hover:bg-zinc-900 group-hover:text-white"
             >
               <div className="flex items-center gap-2">
                 <FileText className="w-5 h-5" />
-                Ver Detalhes do Cartão
+                Ver Detalhes do CartÃ£o
               </div>
               <ChevronRight className="w-5 h-5 opacity-50" />
             </button>
@@ -129,8 +129,8 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
             <FileText className="w-10 h-10 text-zinc-300" />
           </div>
           <div className="space-y-2">
-            <h3 className="text-2xl font-bold text-zinc-900">Nenhum cartão encontrado</h3>
-            <p className="text-zinc-500 max-w-xs">Digitalize seu primeiro cartão para começar a gerenciar suas horas.</p>
+            <h3 className="text-2xl font-bold text-zinc-900">Nenhum cartÃ£o encontrado</h3>
+            <p className="text-zinc-500 max-w-xs">Digitalize seu primeiro cartÃ£o para comeÃ§ar a gerenciar suas horas.</p>
           </div>
         </div>
       )}
