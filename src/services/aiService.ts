@@ -77,6 +77,14 @@ Extraia do topo do cartao:
 - Ignore colunas de total manual ou colunas auxiliares de HE.
 - Retorne exatamente 31 itens em "entries".
 
+### REGRA PARA ANOTACOES MANUAIS (MUITO IMPORTANTE):
+- Nao confundir anotacoes manuscritas/carimbos/observacoes com marcacoes de ponto.
+- Exemplos de anotacao: "falta", "atestado", "folga", "abono", "DSR", "ferias", rubricas, assinaturas, circulos, riscos, somatórios de horas,1h ,2.55 , 3,55.
+- Texto livre, siglas ou observacoes NUNCA devem virar horario.
+- Se houver apenas anotacao no dia e nenhuma marcacao valida, manter todos os horarios como "".
+- Quando identificar anotacao relacionada ao dia, marcar "isDPAnnotation": true nesse item.
+- So preencher campos de horario quando houver valor claramente no formato de marcacao de ponto (HH:MM).
+
 REGRA DE VIRADA DE DIA:
 - Se entrada ocorreu em um dia e saida no dia seguinte, use saida vazia no dia da entrada.
 - Se saida ocorreu no dia atual e a entrada foi no dia anterior, use entrada vazia no dia da saida.
