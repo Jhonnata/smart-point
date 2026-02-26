@@ -5,7 +5,15 @@ import path from "path";
 import crypto from "crypto";
 import fs from "fs";
 
-const dbPath = process.env.SQLITE_PATH || "ponto.db";
+const isProduction = process.env.NODE_ENV === "production";
+const configuredDbPath = String(process.env.SQLITE_PATH || "").trim();
+const dbPath = configuredDbPath || (isProduction ? "/data/ponto.db" : "ponto.db");
+
+if (isProduction && !configuredDbPath) {
+  console.warn("[DB] SQLITE_PATH nao definido. Usando fallback /data/ponto.db.");
+  console.warn("[DB] Configure SQLITE_PATH no Railway para o caminho do volume persistente.");
+}
+
 const dbDir = path.dirname(dbPath);
 if (dbDir && dbDir !== "." && !fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
@@ -1643,5 +1651,4 @@ async function startServer() {
 }
 
 startServer();
-
 
