@@ -1020,7 +1020,7 @@ export default function App() {
                     </div>
                     <div className="space-y-2">
                       <h3 className="text-2xl font-bold text-zinc-900">Nenhum dado encontrado</h3>
-                      <p className="text-zinc-500 max-w-xs">Comece digitalizando seu cartÃ£o de ponto para ver o resumo financeiro.</p>
+                      <p className="text-zinc-500 max-w-xs">Comece digitalizando seu cartão de ponto para ver o resumo financeiro.</p>
                     </div>
                     <button onClick={() => setView('upload')} className="px-8 py-4 bg-zinc-900 text-white rounded-2xl font-bold shadow-xl shadow-zinc-200">
                       Digitalizar Agora
@@ -1043,7 +1043,7 @@ export default function App() {
                     </div>
                     <div className="space-y-2">
                       <h3 className="text-2xl font-bold text-zinc-900">Nenhum dado encontrado</h3>
-                      <p className="text-zinc-500 max-w-xs">Digitalize seu cartÃ£o para gerar a pÃ¡gina de holerith.</p>
+                      <p className="text-zinc-500 max-w-xs">Digitalize seu cartão para gerar a página de holerith.</p>
                     </div>
                     <button onClick={() => setView('upload')} className="px-8 py-4 bg-zinc-900 text-white rounded-2xl font-bold shadow-xl shadow-zinc-200">
                       Digitalizar Agora

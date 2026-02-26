@@ -64,11 +64,11 @@ export default function DashboardView({ entries, settings }: Props) {
               <FileText className="w-6 h-6 text-white" />
             </div>
             <div>
-              <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Total de CartÃµes</div>
+              <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Total de Cartões</div>
               <div className="text-2xl sm:text-3xl font-black text-zinc-900">{stats.totalCards}</div>
             </div>
           </div>
-          <div className="text-xs text-zinc-500 font-medium">PerÃ­odos cadastrados no sistema</div>
+          <div className="text-xs text-zinc-500 font-medium">Períodos cadastrados no sistema</div>
         </div>
 
         <div className="bg-white p-5 sm:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm">
@@ -93,19 +93,19 @@ export default function DashboardView({ entries, settings }: Props) {
               <TrendingUp className="w-6 h-6 text-white" />
             </div>
             <div>
-              <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">MÃ©dia de Extras</div>
+              <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Média de Extras</div>
               <div className="text-2xl sm:text-3xl font-black text-zinc-900">
                 {formatCurrency(stats.monthlyStats.reduce((acc, curr) => acc + curr.extras, 0) / (stats.totalCards || 1))}
               </div>
             </div>
           </div>
-          <div className="text-xs text-zinc-500 font-medium">Valor mÃ©dio por mÃªs</div>
+          <div className="text-xs text-zinc-500 font-medium">Valor médio por mês</div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-8">
         <div className="bg-white p-5 sm:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm">
-          <h3 className="text-base sm:text-lg font-bold text-zinc-900 mb-4 sm:mb-6 italic tracking-tight">EvoluÃ§Ã£o de Ganhos Extras</h3>
+          <h3 className="text-base sm:text-lg font-bold text-zinc-900 mb-4 sm:mb-6 italic tracking-tight">Evolução de Ganhos Extras</h3>
           <div className="h-[240px] sm:h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={stats.monthlyStats}>
@@ -123,7 +123,7 @@ export default function DashboardView({ entries, settings }: Props) {
         </div>
 
         <div className="bg-white p-5 sm:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm">
-          <h3 className="text-base sm:text-lg font-bold text-zinc-900 mb-4 sm:mb-6 italic tracking-tight">EvoluÃ§Ã£o de Horas Trabalhadas</h3>
+          <h3 className="text-base sm:text-lg font-bold text-zinc-900 mb-4 sm:mb-6 italic tracking-tight">Evolução de Horas Trabalhadas</h3>
           <div className="h-[240px] sm:h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={stats.monthlyStats}>

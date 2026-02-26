@@ -36,7 +36,7 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
       !!(e.entryExtra || '').trim() ||
       !!(e.exitExtra || '').trim();
 
-    // Conta dias Ãºnicos da competÃªncia (01..31), evitando duplicidade entre cartÃ£o normal e extra.
+    // Conta dias únicos da competência (01..31), evitando duplicidade entre cartão normal e extra.
     const uniqueDays = new Set(
       monthEntries
         .filter(hasAnyTime)
@@ -81,7 +81,7 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
                   {isValidDate ? format(dateObj, 'MMMM yyyy', { locale: ptBR }) : month}
                 </h3>
                 <p className="text-xs font-bold text-zinc-400 uppercase tracking-widest">
-                  CartÃ£o: {meta.cardNumber || '--'}
+                  Cartão: {meta.cardNumber || '--'}
                 </p>
               </div>
 
@@ -94,7 +94,7 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
                   </div>
                 </div>
                 <div className="bg-zinc-50 p-4 rounded-2xl">
-                  <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">MÃ­dia</div>
+                  <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">Mídia</div>
                   <div className="flex items-center gap-2">
                     <div className={cn(
                       "w-2 h-2 rounded-full",
@@ -115,7 +115,7 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
             >
               <div className="flex items-center gap-2">
                 <FileText className="w-5 h-5" />
-                Ver Detalhes do CartÃ£o
+                Ver Detalhes do Cartão
               </div>
               <ChevronRight className="w-5 h-5 opacity-50" />
             </button>
@@ -129,8 +129,8 @@ export default function CardListView({ entries, availableMonths, onSelectMonth, 
             <FileText className="w-10 h-10 text-zinc-300" />
           </div>
           <div className="space-y-2">
-            <h3 className="text-2xl font-bold text-zinc-900">Nenhum cartÃ£o encontrado</h3>
-            <p className="text-zinc-500 max-w-xs">Digitalize seu primeiro cartÃ£o para comeÃ§ar a gerenciar suas horas.</p>
+            <h3 className="text-2xl font-bold text-zinc-900">Nenhum cartão encontrado</h3>
+            <p className="text-zinc-500 max-w-xs">Digitalize seu primeiro cartão para começar a gerenciar suas horas.</p>
           </div>
         </div>
       )}
