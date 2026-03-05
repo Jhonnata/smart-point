@@ -72,6 +72,13 @@ function buildRates(settings: Settings): RatePack {
   return { hourlyRate, rate50, rate75, rate100, rate125 };
 }
 
+export function resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes: number, workedMinutes: number): number {
+  if (rawOvertimeMinutes <= 0) return 0;
+  if (Math.max(0, workedMinutes) >= 6 * 60) return 60;
+  if (rawOvertimeMinutes >= 4 * 60) return 15;
+  return 0;
+}
+
 function composeRules(rules: DayRule[]) {
   return (ctx: DayRuleContext) => {
     let index = -1;
@@ -106,10 +113,8 @@ const computeWorkedTimeRule: DayRule = (ctx, next) => {
 };
 
 function applyOvertimeDiscounts(rawOvertimeMinutes: number, workedMinutes: number): number {
-  if (rawOvertimeMinutes <= 0) return 0;
-  const discountByOvertime = Math.floor(rawOvertimeMinutes / (4 * 60)) * 15;
-  const discountByWorked = Math.floor(Math.max(0, workedMinutes) / (6 * 60)) * 60;
-  return Math.max(0, rawOvertimeMinutes - discountByOvertime - discountByWorked);
+  const discountMinutes = resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes, workedMinutes);
+  return Math.max(0, rawOvertimeMinutes - discountMinutes);
 }
 
 const computeDayOvertimeRule: DayRule = (ctx, next) => {

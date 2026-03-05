@@ -1,4 +1,8 @@
-import { runOvertimeEngine, type OvertimeComputationResult } from './overtimeEngine';
+import {
+  runOvertimeEngine,
+  resolveDailyOvertimeDiscountMinutes,
+  type OvertimeComputationResult
+} from './overtimeEngine';
 import {
   minutesToTime,
   normalizeOvernightEntries,
@@ -94,6 +98,7 @@ export {
   minutesToTime,
   normalizeOvernightEntries,
   parseCompDays,
+  resolveDailyOvertimeDiscountMinutes,
   resolveDailyJourneyMinutes,
   sumEntryWorkedMinutes,
   timeToMinutes

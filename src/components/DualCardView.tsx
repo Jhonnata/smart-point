@@ -1,8 +1,16 @@
 import React from 'react';
-import { ArrowLeft, Save, Upload, Calendar, Clock } from 'lucide-react';
+import { ArrowLeft, Save, Upload, Calendar, Clock, Info } from 'lucide-react';
 import { differenceInCalendarDays, parseISO, isValid } from 'date-fns';
 import { toast } from 'sonner';
-import { normalizeOvernightEntries, sumEntryWorkedMinutes, timeToMinutes, type TimeEntry, type Settings } from '../lib/calculations';
+import {
+  normalizeOvernightEntries,
+  resolveDailyJourneyMinutes,
+  resolveDailyOvertimeDiscountMinutes,
+  sumEntryWorkedMinutes,
+  timeToMinutes,
+  type TimeEntry,
+  type Settings
+} from '../lib/calculations';
 import { cn } from '../lib/utils';
 
 interface Props {
@@ -112,6 +120,24 @@ function calcTotal(e: TimeEntry): string {
   const min = sumEntryWorkedMinutes(e);
   if (min === 0) return '';
   return minutesToHHMM(min);
+}
+
+function resolveEntryDiscountMinutes(entry: TimeEntry, isOvertimeCardEntry: boolean, settings: Settings): number {
+  const workedMinutes = sumEntryWorkedMinutes(entry);
+  if (workedMinutes <= 0) return 0;
+
+  const date = parseISO(entry.date);
+  if (!isValid(date)) return 0;
+  const dayOfWeek = date.getDay();
+  const journeyMinutes = resolveDailyJourneyMinutes(
+    settings.dailyJourney || 0,
+    isOvertimeCardEntry,
+    dayOfWeek,
+    !!settings.saturdayCompensation,
+    settings.compDays
+  );
+  const rawOvertimeMinutes = dayOfWeek === 0 ? workedMinutes : Math.max(0, workedMinutes - journeyMinutes);
+  return resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes, workedMinutes);
 }
 
 export default function DualCardView({ entries, onSave, onBack, month, onUploadClick, settings, disableSave }: Props) {
@@ -313,6 +339,9 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
 
             list.forEach((e, idx) => {
               const normalizedEntry = normalizedByDay.get(e.day || '') || e;
+              const isOvertimeCardEntry = side === 'right';
+              const discountMinutes = resolveEntryDiscountMinutes(normalizedEntry, isOvertimeCardEntry, settings);
+              const discountLabel = discountMinutes === 60 ? '1h' : discountMinutes === 15 ? '15min' : '';
               const date = parseISO(e.date);
               const validDate = isValid(date);
               const dayOfWeek = validDate ? date.getDay() : -1;
@@ -422,7 +451,18 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
                   </td>
                   <td className="px-2 py-1.5 text-right bg-zinc-50/20">
                     {calcTotal(normalizedEntry) ? (
-                      <span className="font-black text-zinc-900 text-[11px]">{calcTotal(normalizedEntry)}</span>
+                      <span className="inline-flex items-center justify-end gap-1.5 font-black text-zinc-900 text-[11px]">
+                        {calcTotal(normalizedEntry)}
+                        {discountMinutes > 0 && (
+                          <span
+                            className="inline-flex items-center text-amber-600"
+                            title={`Desconto diario aplicado: ${discountLabel}`}
+                            aria-label={`Desconto diario aplicado: ${discountLabel}`}
+                          >
+                            <Info className="w-3.5 h-3.5" />
+                          </span>
+                        )}
+                      </span>
                     ) : (
                       <span className="text-zinc-200 text-[11px]">--</span>
                     )}
