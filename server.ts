@@ -455,17 +455,45 @@ function resolveAllowedOrigins(): Set<string> {
 
   if (configured.length === 0) {
     configured.push("https://jhonnata.github.io");
+    if (process.env.NODE_ENV !== "production") {
+      configured.push(
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173"
+      );
+    }
   }
 
   return new Set(configured);
 }
 
-function resolveCookieSameSite(): "Lax" | "Strict" | "None" {
+function resolveCookieSameSiteOverride(): "Lax" | "Strict" | "None" | null {
   const raw = String(process.env.SESSION_COOKIE_SAMESITE || "").trim().toLowerCase();
   if (raw === "none") return "None";
   if (raw === "strict") return "Strict";
   if (raw === "lax") return "Lax";
-  return process.env.NODE_ENV === "production" ? "None" : "Lax";
+  return null;
+}
+
+function requestIsHttps(req: any): boolean {
+  if (req?.secure) return true;
+  const forwardedProto = String(req?.headers?.["x-forwarded-proto"] || "").split(",")[0].trim().toLowerCase();
+  if (forwardedProto === "https") return true;
+  const origin = normalizeOrigin(String(req?.headers?.origin || ""));
+  return origin.startsWith("https://");
+}
+
+function resolveCookieSameSiteForRequest(req: any): "Lax" | "Strict" | "None" {
+  const forced = resolveCookieSameSiteOverride();
+  if (forced) return forced;
+
+  const origin = normalizeOrigin(String(req?.headers?.origin || ""));
+  const host = String(req?.headers?.host || "").trim().toLowerCase();
+  const serverOrigin = host ? normalizeOrigin(`${requestIsHttps(req) ? "https" : "http"}://${host}`) : "";
+  const isCrossOrigin = !!origin && !!serverOrigin && origin !== serverOrigin;
+
+  return isCrossOrigin ? "None" : "Lax";
 }
 
 function isValidEmail(email: string): boolean {
@@ -482,20 +510,20 @@ function createSession(userId: number): string {
   return token;
 }
 
-function setSessionCookie(res: any, token: string) {
-  const isProd = process.env.NODE_ENV === "production";
-  const secureFlag = isProd ? "; Secure" : "";
-  const sameSite = resolveCookieSameSite();
+function setSessionCookie(req: any, res: any, token: string) {
+  const sameSite = resolveCookieSameSiteForRequest(req);
+  const secure = sameSite === "None" ? true : requestIsHttps(req);
+  const secureFlag = secure ? "; Secure" : "";
   res.setHeader(
     "Set-Cookie",
     `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${SESSION_MAX_AGE_SECONDS}${secureFlag}`
   );
 }
 
-function clearSessionCookie(res: any) {
-  const isProd = process.env.NODE_ENV === "production";
-  const secureFlag = isProd ? "; Secure" : "";
-  const sameSite = resolveCookieSameSite();
+function clearSessionCookie(req: any, res: any) {
+  const sameSite = resolveCookieSameSiteForRequest(req);
+  const secure = sameSite === "None" ? true : requestIsHttps(req);
+  const secureFlag = secure ? "; Secure" : "";
   res.setHeader(
     "Set-Cookie",
     `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=0${secureFlag}`
@@ -863,6 +891,7 @@ sanitizeSharedSettingsData();
 
 async function startServer() {
   const app = express();
+  app.set("trust proxy", 1);
   const allowedOrigins = resolveAllowedOrigins();
 
   app.use((req, res, next) => {
@@ -915,7 +944,7 @@ async function startServer() {
       const userId = Number(info.lastInsertRowid);
       ensureSettingsForUser(userId);
       const token = createSession(userId);
-      setSessionCookie(res, token);
+      setSessionCookie(req, res, token);
 
       res.json({
         user: {
@@ -946,7 +975,7 @@ async function startServer() {
 
       ensureSettingsForUser(Number(user.id));
       const token = createSession(Number(user.id));
-      setSessionCookie(res, token);
+      setSessionCookie(req, res, token);
       res.json({
         user: {
           id: Number(user.id),
@@ -974,7 +1003,7 @@ async function startServer() {
       if (token) {
         db.prepare("DELETE FROM user_sessions WHERE token = ?").run(token);
       }
-      clearSessionCookie(res);
+      clearSessionCookie(req, res);
       res.json({ success: true });
     } catch (err: any) {
       console.error("Error in POST /api/auth/logout:", err);
@@ -1651,4 +1680,3 @@ async function startServer() {
 }
 
 startServer();
-
