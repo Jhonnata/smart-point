@@ -2,7 +2,7 @@ import React from 'react';
 import { ArrowLeft, Save, Upload, Calendar, Clock } from 'lucide-react';
 import { differenceInCalendarDays, parseISO, isValid } from 'date-fns';
 import { toast } from 'sonner';
-import { normalizeOvernightEntries, type TimeEntry, type Settings } from '../lib/calculations';
+import { normalizeOvernightEntries, sumEntryWorkedMinutes, timeToMinutes, type TimeEntry, type Settings } from '../lib/calculations';
 import { cn } from '../lib/utils';
 
 interface Props {
@@ -19,30 +19,6 @@ const WEEKDAY_ABBR = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'] as const;
 const MONTH_ABBR = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'] as const;
 const WEEK_TARGET_HOURS = 44;
 type TimeField = 'entry1' | 'exit1' | 'entry2' | 'exit2' | 'entryExtra' | 'exitExtra';
-
-function toMinutes(t: string): number {
-  if (!t || !t.includes(':')) return 0;
-  const [h, m] = t.split(':').map(Number);
-  if (Number.isNaN(h) || Number.isNaN(m)) return 0;
-  return h * 60 + m;
-}
-
-function diffMinutes(start: string, end: string): number {
-  if (!start || !end || !start.includes(':') || !end.includes(':')) return 0;
-  const s = toMinutes(start);
-  const e = toMinutes(end);
-  let d = e - s;
-  if (d < 0) d += 24 * 60;
-  return d;
-}
-
-function calcWorkedMinutes(e: TimeEntry): number {
-  return (
-    diffMinutes(e.entry1, e.exit1) +
-    diffMinutes(e.entry2, e.exit2) +
-    diffMinutes(e.entryExtra, e.exitExtra)
-  );
-}
 
 function minutesToHHMM(min: number): string {
   const h = Math.floor(min / 60);
@@ -133,7 +109,7 @@ function getCompetenciaPeriodLabel(monthStr: string, cycleStartDay: number): str
 }
 
 function calcTotal(e: TimeEntry): string {
-  const min = calcWorkedMinutes(e);
+  const min = sumEntryWorkedMinutes(e);
   if (min === 0) return '';
   return minutesToHHMM(min);
 }
@@ -249,7 +225,7 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
         let exit2 = baseExit2;
         const compDays = (settings.compDays || '1,2,3,4').split(',').map(Number);
         if (settings.saturdayCompensation && compDays.includes(dayOfWeek)) {
-          exit2 = minutesToHHMM(toMinutes(baseExit2) + 60);
+          exit2 = minutesToHHMM(timeToMinutes(baseExit2) + 60);
         }
         return {
           ...e,
@@ -350,7 +326,7 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
                 weekStartLabel = WEEKDAY_ABBR[dayOfWeek];
               }
               if (isMonToSat) {
-                weekTotalMinutes += calcWorkedMinutes(normalizedEntry);
+                weekTotalMinutes += sumEntryWorkedMinutes(normalizedEntry);
               }
 
               rows.push(

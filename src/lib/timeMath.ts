@@ -42,10 +42,36 @@ export function diffMinutes(start: string, end: string): number {
 }
 
 export function periodsFromEntry(entry: PunchEntryLike): Array<[string, string]> {
+  const entry1 = entry.entry1 || '';
+  const exit1 = entry.exit1 || '';
+  const entry2 = entry.entry2 || '';
+  const exit2 = entry.exit2 || '';
+  const entryExtra = entry.entryExtra || '';
+  const exitExtra = entry.exitExtra || '';
+
+  // Supports rows where the user/ocr filled only "Saida Extra":
+  // if there is an unmatched previous start (entry2 or entry1), pair it with exitExtra.
+  if (!entryExtra && normalizeClock(exitExtra)) {
+    if (normalizeClock(entry2) && !normalizeClock(exit2)) {
+      return [
+        [entry1, exit1],
+        [entry2, exitExtra],
+        ['', '']
+      ];
+    }
+    if (normalizeClock(entry1) && !normalizeClock(exit1)) {
+      return [
+        [entry1, exitExtra],
+        [entry2, exit2],
+        ['', '']
+      ];
+    }
+  }
+
   return [
-    [entry.entry1 || '', entry.exit1 || ''],
-    [entry.entry2 || '', entry.exit2 || ''],
-    [entry.entryExtra || '', entry.exitExtra || '']
+    [entry1, exit1],
+    [entry2, exit2],
+    [entryExtra, exitExtra]
   ];
 }
 

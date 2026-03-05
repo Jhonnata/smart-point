@@ -105,13 +105,21 @@ const computeWorkedTimeRule: DayRule = (ctx, next) => {
   next();
 };
 
+function applyOvertimeDiscounts(rawOvertimeMinutes: number, workedMinutes: number): number {
+  if (rawOvertimeMinutes <= 0) return 0;
+  const discountByOvertime = Math.floor(rawOvertimeMinutes / (4 * 60)) * 15;
+  const discountByWorked = Math.floor(Math.max(0, workedMinutes) / (6 * 60)) * 60;
+  return Math.max(0, rawOvertimeMinutes - discountByOvertime - discountByWorked);
+}
+
 const computeDayOvertimeRule: DayRule = (ctx, next) => {
-  ctx.dayOvertimeMinutes = ctx.isSunday
+  const rawOvertimeMinutes = ctx.isSunday
     ? ctx.dailyTotalMinutes
     : Math.max(
         0,
         ctx.dailyTotalMinutes - (ctx.dailyJourneyMinutesEntry || (ctx.dailyTotalMinutes > 0 ? 0 : Infinity))
       );
+  ctx.dayOvertimeMinutes = applyOvertimeDiscounts(rawOvertimeMinutes, ctx.dailyTotalMinutes);
   next();
 };
 
