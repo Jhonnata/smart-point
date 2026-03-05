@@ -1,5 +1,6 @@
 const rawApiBase = (import.meta.env.VITE_API_BASE_URL || '').trim();
 const normalizedApiBase = rawApiBase.replace(/\/+$/, '');
+const AUTH_TOKEN_STORAGE_KEY = 'smart_point_auth_token';
 
 function normalizePath(path: string): string {
   if (!path) return '/';
@@ -11,10 +12,49 @@ export function apiUrl(path: string): string {
   return normalizedApiBase ? `${normalizedApiBase}${normalizedPath}` : normalizedPath;
 }
 
+export function getStoredAuthToken(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    return String(window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function setStoredAuthToken(token: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const safe = String(token || '').trim();
+    if (!safe) {
+      window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+      return;
+    }
+    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, safe);
+  } catch {
+    // noop
+  }
+}
+
+export function clearStoredAuthToken(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    // noop
+  }
+}
+
 export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers || {});
+  const token = getStoredAuthToken();
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
   return fetch(apiUrl(path), {
+    ...init,
     credentials: init?.credentials ?? 'include',
-    ...init
+    headers
   });
 }
 

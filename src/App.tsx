@@ -24,7 +24,7 @@ import DashboardView from './components/DashboardView';
 import type { Settings } from './lib/calculations';
 import type { TimeEntry } from './services/aiService';
 import { cn } from './lib/utils';
-import { apiFetch, isApiUnavailableInCurrentHost } from './lib/api';
+import { apiFetch, clearStoredAuthToken, isApiUnavailableInCurrentHost, setStoredAuthToken } from './lib/api';
 import { parseISO, isValid, format as formatDate } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
@@ -37,6 +37,28 @@ type AuthUser = {
   username?: string;
   displayName: string;
 };
+
+const AUTH_USER_STORAGE_KEY = 'smart_point_auth_user';
+
+function loadStoredAuthUser(): AuthUser | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(AUTH_USER_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const id = Number(parsed?.id || 0);
+    const email = String(parsed?.email || parsed?.username || '').trim().toLowerCase();
+    if (!id || !email) return null;
+    return {
+      id,
+      email,
+      username: email,
+      displayName: String(parsed?.displayName || email)
+    };
+  } catch {
+    return null;
+  }
+}
 
 export default function App() {
   const [view, setView] = useState<View>(() => {
@@ -56,7 +78,7 @@ export default function App() {
   const [uploadContext, setUploadContext] = useState<{ month: string, isOvertime: boolean } | null>(null);
   const [pendingCardSaveMode, setPendingCardSaveMode] = useState<CardSaveMode | null>(null);
   const [localProjectedByMonth, setLocalProjectedByMonth] = useState<Record<string, any>>({});
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(() => loadStoredAuthUser());
   const [authLoading, setAuthLoading] = useState(true);
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [authSubmitting, setAuthSubmitting] = useState(false);
@@ -283,6 +305,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (!authUser) {
+        window.localStorage.removeItem(AUTH_USER_STORAGE_KEY);
+      } else {
+        window.localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(authUser));
+      }
+    } catch {
+      // noop
+    }
+  }, [authUser]);
+
+  useEffect(() => {
     let cancelled = false;
     const bootstrapAuth = async () => {
       setAuthLoading(true);
@@ -296,6 +331,7 @@ export default function App() {
       try {
         const res = await apiFetch('/api/auth/me');
         if (!res.ok) {
+          clearStoredAuthToken();
           if (!cancelled) setAuthUser(null);
           return;
         }
@@ -305,6 +341,7 @@ export default function App() {
         }
       } catch (err) {
         console.error('Error checking session:', err);
+        clearStoredAuthToken();
         if (!cancelled) setAuthUser(null);
       } finally {
         if (!cancelled) setAuthLoading(false);
@@ -442,7 +479,7 @@ export default function App() {
       return;
     }
     if (mode === 'register' && !displayName) {
-      toast.error('Informe o nome de exibição.');
+      toast.error('Informe o nome de exibicao.');
       return;
     }
 
@@ -456,18 +493,25 @@ export default function App() {
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data?.error || 'Falha na autenticação.');
+        throw new Error(data?.error || 'Falha na autenticacao.');
       }
 
       const user = normalizeAuthUser(data?.user);
-      if (!user) throw new Error('Sessão não retornada pelo servidor.');
+      if (!user) throw new Error('Sessao nao retornada pelo servidor.');
+
+      const token = String(data?.sessionToken || '').trim();
+      if (token) {
+        setStoredAuthToken(token);
+      } else {
+        clearStoredAuthToken();
+      }
 
       setAuthUser(user);
       setSettings(null);
       setAuthForm((prev) => ({ ...prev, password: '' }));
       toast.success(mode === 'login' ? 'Login realizado.' : 'Conta criada com sucesso.');
     } catch (err: any) {
-      toast.error(err?.message || 'Erro na autenticação.');
+      toast.error(err?.message || 'Erro na autenticacao.');
     } finally {
       setAuthSubmitting(false);
     }
@@ -479,18 +523,19 @@ export default function App() {
     } catch (err) {
       console.error('Error during logout:', err);
     } finally {
+      clearStoredAuthToken();
       setAuthUser(null);
       setSettings(null);
       setAuthForm((prev) => ({ ...prev, password: '' }));
       setAuthMode('login');
     }
   };
-
   const fetchData = async () => {
     setIsLoading(true);
     try {
       const sRes = await apiFetch('/api/settings');
       if (sRes.status === 401) {
+        clearStoredAuthToken();
         setAuthUser(null);
         return;
       }
@@ -515,6 +560,7 @@ export default function App() {
         body: JSON.stringify(newSettings)
       });
       if (res.status === 401) {
+        clearStoredAuthToken();
         setAuthUser(null);
         return;
       }
@@ -734,7 +780,7 @@ export default function App() {
 
   if (authLoading || (authUser && isLoading)) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-zinc-50">
+      <div className="min-h-[100dvh] flex items-center justify-center bg-zinc-50">
         <div className="w-12 h-12 border-4 border-zinc-200 border-t-zinc-900 rounded-full animate-spin" />
       </div>
     );
@@ -742,7 +788,7 @@ export default function App() {
 
   if (!authUser) {
     return (
-      <div className="min-h-screen bg-[#F8F9FA] flex items-start sm:items-center justify-center px-3 py-4 sm:p-4 overflow-y-auto">
+      <div className="min-h-[100dvh] bg-[#F8F9FA] flex items-start sm:items-center justify-center px-3 py-4 sm:p-4 overflow-y-auto">
         <div className="w-full max-w-md bg-white border border-zinc-100 rounded-2xl sm:rounded-3xl p-5 sm:p-8 shadow-sm">
           <div className="flex items-center gap-3 mb-5 sm:mb-6">
             <div className="w-9 h-9 sm:w-10 sm:h-10 bg-zinc-900 rounded-xl flex items-center justify-center">
@@ -835,15 +881,26 @@ export default function App() {
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'resumo', label: 'Resumo Financeiro', icon: DollarSign },
     { id: 'holerith', label: 'Holerith', icon: FileText },
-    { id: 'card-list', label: 'Cartões de Ponto', icon: FileText },
-    { id: 'upload', label: 'Novo Lançamento', icon: PlusCircle },
-    { id: 'settings', label: 'Configurações', icon: SettingsIcon },
+    { id: 'card-list', label: 'CartÃµes de Ponto', icon: FileText },
+    { id: 'upload', label: 'Novo LanÃ§amento', icon: PlusCircle },
+    { id: 'settings', label: 'ConfiguraÃ§Ãµes', icon: SettingsIcon },
+  ];
+
+  const mobileTabItems = [
+    { id: 'dashboard', label: 'Inicio', icon: LayoutDashboard },
+    { id: 'resumo', label: 'Resumo', icon: DollarSign },
+    { id: 'upload', label: 'Novo', icon: PlusCircle },
+    { id: 'card-list', label: 'Cartoes', icon: FileText },
+    { id: 'settings', label: 'Ajustes', icon: SettingsIcon },
   ];
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] flex flex-col md:flex-row font-sans selection:bg-zinc-900 selection:text-white">
+    <div className="h-[100dvh] md:h-auto md:min-h-screen bg-[#F8F9FA] flex flex-col md:flex-row font-sans selection:bg-zinc-900 selection:text-white overflow-hidden">
       {/* Mobile Header */}
-      <div className="md:hidden bg-white border-b border-zinc-100 px-4 h-14 flex items-center justify-between sticky top-0 z-50">
+      <div
+        className="md:hidden bg-white border-b border-zinc-100 px-4 h-14 flex items-center justify-between sticky top-0 z-50"
+        style={{ paddingTop: 'env(safe-area-inset-top)' }}
+      >
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-zinc-900 rounded-lg flex items-center justify-center">
             <PlusCircle className="w-5 h-5 text-white" />
@@ -867,7 +924,7 @@ export default function App() {
 
       {/* Sidebar */}
       <aside className={cn(
-        "fixed inset-y-0 left-0 z-50 bg-white border-r border-zinc-100 transition-transform md:relative md:translate-x-0 w-[88vw] max-w-72 md:w-72 flex flex-col pt-14 md:pt-0",
+        "fixed inset-y-0 left-0 z-50 bg-white border-r border-zinc-100 transition-transform md:relative md:translate-x-0 w-[88vw] max-w-72 md:w-72 flex flex-col pt-14 md:pt-0 overflow-y-auto pb-24 md:pb-0",
         isMenuOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <div className="p-8 hidden md:block">
@@ -924,7 +981,7 @@ export default function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 p-3 sm:p-4 md:p-10 overflow-y-auto">
+      <main className="flex-1 p-3 sm:p-4 md:p-10 pb-28 md:pb-10 overflow-y-auto">
         {/* Month Selector & Header */}
         <div className="mb-6 sm:mb-8 flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6">
           <h2 className="text-2xl sm:text-3xl font-black text-zinc-900 tracking-tighter leading-tight">
@@ -1372,11 +1429,39 @@ export default function App() {
         </AnimatePresence>
       </main>
 
+      <nav
+        className="md:hidden fixed inset-x-0 bottom-0 z-30 border-t border-zinc-200 bg-white/95 backdrop-blur"
+        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 0.35rem)' }}
+      >
+        <div className="grid grid-cols-5 gap-1 px-2 py-1">
+          {mobileTabItems.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => {
+                setView(item.id as View);
+                setIsMenuOpen(false);
+              }}
+              className={cn(
+                "flex flex-col items-center justify-center gap-1 rounded-xl py-2 text-[11px] font-bold transition-colors",
+                view === item.id ? "text-zinc-900 bg-zinc-100" : "text-zinc-500"
+              )}
+            >
+              <item.icon className="w-4 h-4" />
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </div>
+      </nav>
+
       <Toaster position="top-right" richColors />
 
     </div>
   );
 }
+
+
+
 
 
 

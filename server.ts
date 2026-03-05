@@ -417,6 +417,23 @@ function parseCookies(cookieHeader: string | undefined): Record<string, string> 
   return out;
 }
 
+function getBearerTokenFromRequest(req: any): string | undefined {
+  const raw = req?.headers?.authorization;
+  const header = Array.isArray(raw) ? String(raw[0] || "") : String(raw || "");
+  const match = header.match(/^\s*Bearer\s+(.+)\s*$/i);
+  if (!match) return undefined;
+  const token = String(match[1] || "").trim();
+  return token || undefined;
+}
+
+function getSessionTokenFromRequest(req: any): string | undefined {
+  const bearer = getBearerTokenFromRequest(req);
+  if (bearer) return bearer;
+  const cookies = parseCookies(req.headers?.cookie);
+  const cookieToken = String(cookies[SESSION_COOKIE_NAME] || "").trim();
+  return cookieToken || undefined;
+}
+
 function hashPassword(password: string, salt?: string): string {
   const safeSalt = salt || crypto.randomBytes(16).toString("hex");
   const digest = crypto.scryptSync(password, safeSalt, 64).toString("hex");
@@ -557,8 +574,7 @@ function getUserFromSessionToken(token: string | undefined) {
 }
 
 function getAuthUserFromRequest(req: any) {
-  const cookies = parseCookies(req.headers?.cookie);
-  const token = cookies[SESSION_COOKIE_NAME];
+  const token = getSessionTokenFromRequest(req);
   return getUserFromSessionToken(token);
 }
 
@@ -947,6 +963,7 @@ async function startServer() {
       setSessionCookie(req, res, token);
 
       res.json({
+        sessionToken: token,
         user: {
           id: userId,
           username: emailRaw,
@@ -977,6 +994,7 @@ async function startServer() {
       const token = createSession(Number(user.id));
       setSessionCookie(req, res, token);
       res.json({
+        sessionToken: token,
         user: {
           id: Number(user.id),
           username: String(user.username || ""),
@@ -998,8 +1016,7 @@ async function startServer() {
 
   app.post("/api/auth/logout", (req, res) => {
     try {
-      const cookies = parseCookies(req.headers?.cookie);
-      const token = cookies[SESSION_COOKIE_NAME];
+      const token = getSessionTokenFromRequest(req);
       if (token) {
         db.prepare("DELETE FROM user_sessions WHERE token = ?").run(token);
       }
