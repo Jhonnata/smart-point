@@ -1,6 +1,7 @@
 const rawApiBase = (import.meta.env.VITE_API_BASE_URL || '').trim();
 const normalizedApiBase = rawApiBase.replace(/\/+$/, '');
 const AUTH_TOKEN_STORAGE_KEY = 'smart_point_auth_token';
+let runtimeAuthToken = '';
 
 function normalizePath(path: string): string {
   if (!path) return '/';
@@ -14,31 +15,61 @@ export function apiUrl(path: string): string {
 
 export function getStoredAuthToken(): string {
   if (typeof window === 'undefined') return '';
+  if (runtimeAuthToken) return runtimeAuthToken;
   try {
-    return String(window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || '').trim();
+    const fromLocal = String(window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || '').trim();
+    if (fromLocal) {
+      runtimeAuthToken = fromLocal;
+      return fromLocal;
+    }
   } catch {
-    return '';
+    // noop
   }
+  try {
+    const fromSession = String(window.sessionStorage.getItem(AUTH_TOKEN_STORAGE_KEY) || '').trim();
+    if (fromSession) {
+      runtimeAuthToken = fromSession;
+      return fromSession;
+    }
+  } catch {
+    // noop
+  }
+  return '';
 }
 
 export function setStoredAuthToken(token: string): void {
   if (typeof window === 'undefined') return;
+  const safe = String(token || '').trim();
+  runtimeAuthToken = safe;
   try {
-    const safe = String(token || '').trim();
     if (!safe) {
       window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
-      return;
+    } else {
+      window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, safe);
     }
-    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, safe);
   } catch {
-    // noop
+    try {
+      if (!safe) {
+        window.sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+      } else {
+        window.sessionStorage.setItem(AUTH_TOKEN_STORAGE_KEY, safe);
+      }
+    } catch {
+      // noop
+    }
   }
 }
 
 export function clearStoredAuthToken(): void {
   if (typeof window === 'undefined') return;
+  runtimeAuthToken = '';
   try {
     window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+  } catch {
+    // noop
+  }
+  try {
+    window.sessionStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
   } catch {
     // noop
   }

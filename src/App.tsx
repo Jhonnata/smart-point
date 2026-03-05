@@ -8,7 +8,6 @@ import {
   LogIn,
   UserPlus,
   ChevronRight,
-  Menu,
   X,
   DollarSign
 } from 'lucide-react';
@@ -42,8 +41,7 @@ const AUTH_USER_STORAGE_KEY = 'smart_point_auth_user';
 
 function loadStoredAuthUser(): AuthUser | null {
   if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(AUTH_USER_STORAGE_KEY);
+  const parseRaw = (raw: string | null): AuthUser | null => {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     const id = Number(parsed?.id || 0);
@@ -55,6 +53,15 @@ function loadStoredAuthUser(): AuthUser | null {
       username: email,
       displayName: String(parsed?.displayName || email)
     };
+  };
+  try {
+    const local = parseRaw(window.localStorage.getItem(AUTH_USER_STORAGE_KEY));
+    if (local) return local;
+  } catch {
+    // noop
+  }
+  try {
+    return parseRaw(window.sessionStorage.getItem(AUTH_USER_STORAGE_KEY));
   } catch {
     return null;
   }
@@ -72,7 +79,6 @@ export default function App() {
   const [monthCache, setMonthCache] = useState<Record<string, any>>({});
   const [selectedMonth, setSelectedMonth] = useState<string>(''); // YYYY-MM
   const [isLoading, setIsLoading] = useState(true);
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [monthData, setMonthData] = useState<any>(null);
   const [isMonthLoading, setIsMonthLoading] = useState(false);
   const [uploadContext, setUploadContext] = useState<{ month: string, isOvertime: boolean } | null>(null);
@@ -306,14 +312,23 @@ export default function App() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    const payload = authUser ? JSON.stringify(authUser) : null;
     try {
-      if (!authUser) {
+      if (!payload) {
         window.localStorage.removeItem(AUTH_USER_STORAGE_KEY);
       } else {
-        window.localStorage.setItem(AUTH_USER_STORAGE_KEY, JSON.stringify(authUser));
+        window.localStorage.setItem(AUTH_USER_STORAGE_KEY, payload);
       }
     } catch {
-      // noop
+      try {
+        if (!payload) {
+          window.sessionStorage.removeItem(AUTH_USER_STORAGE_KEY);
+        } else {
+          window.sessionStorage.setItem(AUTH_USER_STORAGE_KEY, payload);
+        }
+      } catch {
+        // noop
+      }
     }
   }, [authUser]);
 
@@ -479,7 +494,7 @@ export default function App() {
       return;
     }
     if (mode === 'register' && !displayName) {
-      toast.error('Informe o nome de exibicao.');
+      toast.error('Informe o nome de exibição.');
       return;
     }
 
@@ -493,11 +508,11 @@ export default function App() {
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(data?.error || 'Falha na autenticacao.');
+        throw new Error(data?.error || 'Falha na autenticação.');
       }
 
       const user = normalizeAuthUser(data?.user);
-      if (!user) throw new Error('Sessao nao retornada pelo servidor.');
+      if (!user) throw new Error('Sessão não retornada pelo servidor.');
 
       const token = String(data?.sessionToken || '').trim();
       if (token) {
@@ -511,7 +526,7 @@ export default function App() {
       setAuthForm((prev) => ({ ...prev, password: '' }));
       toast.success(mode === 'login' ? 'Login realizado.' : 'Conta criada com sucesso.');
     } catch (err: any) {
-      toast.error(err?.message || 'Erro na autenticacao.');
+      toast.error(err?.message || 'Erro na autenticação.');
     } finally {
       setAuthSubmitting(false);
     }
@@ -881,16 +896,17 @@ export default function App() {
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'resumo', label: 'Resumo Financeiro', icon: DollarSign },
     { id: 'holerith', label: 'Holerith', icon: FileText },
-    { id: 'card-list', label: 'CartÃµes de Ponto', icon: FileText },
-    { id: 'upload', label: 'Novo LanÃ§amento', icon: PlusCircle },
-    { id: 'settings', label: 'ConfiguraÃ§Ãµes', icon: SettingsIcon },
+    { id: 'card-list', label: 'Cartões de Ponto', icon: FileText },
+    { id: 'upload', label: 'Novo Lançamento', icon: PlusCircle },
+    { id: 'settings', label: 'Configurações', icon: SettingsIcon },
   ];
 
   const mobileTabItems = [
-    { id: 'dashboard', label: 'Inicio', icon: LayoutDashboard },
+    { id: 'dashboard', label: 'Início', icon: LayoutDashboard },
     { id: 'resumo', label: 'Resumo', icon: DollarSign },
+    { id: 'holerith', label: 'Holerith', icon: FileText },
     { id: 'upload', label: 'Novo', icon: PlusCircle },
-    { id: 'card-list', label: 'Cartoes', icon: FileText },
+    { id: 'card-list', label: 'Cartões', icon: FileText },
     { id: 'settings', label: 'Ajustes', icon: SettingsIcon },
   ];
 
@@ -907,26 +923,11 @@ export default function App() {
           </div>
           <span className="font-black text-lg tracking-tighter">PontoSmart</span>
         </div>
-        <button onClick={() => setIsMenuOpen(!isMenuOpen)} className="p-2">
-          {isMenuOpen ? <X /> : <Menu />}
-        </button>
+        <div className="text-[11px] font-semibold text-zinc-500 truncate max-w-[45vw]">{authUser.displayName || authUser.email}</div>
       </div>
 
-      {/* Mobile Backdrop */}
-      {isMenuOpen && (
-        <button
-          type="button"
-          aria-label="Fechar menu"
-          className="md:hidden fixed inset-0 bg-zinc-950/35 z-40"
-          onClick={() => setIsMenuOpen(false)}
-        />
-      )}
-
       {/* Sidebar */}
-      <aside className={cn(
-        "fixed inset-y-0 left-0 z-50 bg-white border-r border-zinc-100 transition-transform md:relative md:translate-x-0 w-[88vw] max-w-72 md:w-72 flex flex-col pt-14 md:pt-0 overflow-y-auto pb-24 md:pb-0",
-        isMenuOpen ? "translate-x-0" : "-translate-x-full"
-      )}>
+      <aside className="hidden md:flex md:relative md:w-72 bg-white border-r border-zinc-100 flex-col">
         <div className="p-8 hidden md:block">
           <div className="flex items-center gap-3 mb-8">
             <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shadow-lg shadow-zinc-200">
@@ -940,7 +941,7 @@ export default function App() {
           {navItems.map(item => (
             <button
               key={item.id}
-              onClick={() => { setView(item.id as View); setIsMenuOpen(false); }}
+              onClick={() => { setView(item.id as View); }}
               className={cn(
                 "w-full flex items-center gap-3 px-4 py-4 rounded-2xl font-bold transition-all",
                 view === item.id 
@@ -1433,14 +1434,13 @@ export default function App() {
         className="md:hidden fixed inset-x-0 bottom-0 z-30 border-t border-zinc-200 bg-white/95 backdrop-blur"
         style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 0.35rem)' }}
       >
-        <div className="grid grid-cols-5 gap-1 px-2 py-1">
+        <div className="grid grid-cols-6 gap-1 px-2 py-1">
           {mobileTabItems.map((item) => (
             <button
               key={item.id}
               type="button"
               onClick={() => {
                 setView(item.id as View);
-                setIsMenuOpen(false);
               }}
               className={cn(
                 "flex flex-col items-center justify-center gap-1 rounded-xl py-2 text-[11px] font-bold transition-colors",

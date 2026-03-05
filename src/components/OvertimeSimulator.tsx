@@ -36,7 +36,6 @@ interface DayResult extends PlanRow {
   minutes: number;
   value: number;
   invalidInsideSchedule: boolean;
-  invalidSaturdayWithoutCompensation: boolean;
   truncatedSaturdayLimit: boolean;
 }
 
@@ -155,6 +154,45 @@ function isExtraOutsideSchedule(
 function monthKeyToReference(monthKey: string): string {
   const [year, month] = monthKey.split('-');
   return year && month ? `${month}${year}` : '';
+}
+
+function getEffectiveScheduleForDay(
+  dayOfWeek: number,
+  baseSchedule: BaseSchedule,
+  settings: Settings,
+  parsedCompDays: number[]
+): { start: string; end: string } {
+  if (dayOfWeek === 6 && !settings.saturdayCompensation) {
+    const satStart = normalizeTime(settings.saturdayWorkStart || settings.workStart || '12:00', true);
+    const satEnd = normalizeTime(settings.saturdayWorkEnd || settings.workEnd || '16:00', true);
+    return { start: satStart, end: satEnd };
+  }
+
+  const start = normalizeTime(baseSchedule.entry1 || settings.workStart || '12:00', true);
+  const baseEnd = normalizeTime(baseSchedule.exit2 || settings.workEnd || '21:00', true);
+  let endMin = timeToMinutes(baseEnd);
+  if (settings.saturdayCompensation && parsedCompDays.includes(dayOfWeek)) {
+    endMin += 60;
+  }
+  return { start, end: formatHHMM(endMin) };
+}
+
+function allocateByRate(
+  date: string,
+  startMin: number,
+  maxMinutes: number,
+  currentRemaining: number,
+  getMinuteRate: (dateStr: string, minuteOfDay: number) => number
+): { allocated: number; remaining: number } {
+  let remaining = currentRemaining;
+  let allocated = 0;
+  for (let i = 0; i < maxMinutes; i++) {
+    if (remaining <= 0) break;
+    const minuteOfDay = (startMin + i) % (24 * 60);
+    remaining -= getMinuteRate(date, minuteOfDay) / 60;
+    allocated += 1;
+  }
+  return { allocated, remaining };
 }
 
 function mergeRows(baseRows: PlanRow[], savedRows?: PlanRow[]): PlanRow[] {
@@ -328,15 +366,13 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
         minutes: 0,
         value: 0,
         invalidInsideSchedule: false,
-        invalidSaturdayWithoutCompensation: false,
         truncatedSaturdayLimit: false
       };
     }
 
     const dateObj = parseISO(row.date);
     const dayOfWeek = isValid(dateObj) ? dateObj.getDay() : -1;
-    const scheduleStart = normalizeTime(baseSchedule.entry1 || settings.workStart || '12:00', true);
-    const scheduleEnd = normalizeTime(baseSchedule.exit2 || settings.workEnd || '21:00', true);
+    const { start: scheduleStart, end: scheduleEnd } = getEffectiveScheduleForDay(dayOfWeek, baseSchedule, settings, parsedCompDays);
     const periods: Array<[string, string]> = [
       [normalizeTime(row.entry1, true), normalizeTime(row.exit1, true)],
       [normalizeTime(row.entry2, true), normalizeTime(row.exit2, true)],
@@ -346,18 +382,12 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
     let totalMinutes = 0;
     let totalValue = 0;
     let invalidInsideSchedule = false;
-    let invalidSaturdayWithoutCompensation = false;
     let truncatedSaturdayLimit = false;
     let saturdayAllocatedMinutes = 0;
 
     for (const [start, end] of periods) {
       const duration = diffMinutes(start, end);
       if (duration <= 0) continue;
-
-      if (dayOfWeek === 6 && !settings.saturdayCompensation) {
-        invalidSaturdayWithoutCompensation = true;
-        continue;
-      }
 
       if (dayOfWeek === 6 && settings.saturdayCompensation) {
         const available = Math.max(0, saturdayLimitMinutes - saturdayAllocatedMinutes);
@@ -399,10 +429,9 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
       minutes: totalMinutes,
       value: totalValue,
       invalidInsideSchedule,
-      invalidSaturdayWithoutCompensation,
       truncatedSaturdayLimit
     };
-  }), [rows, baseSchedule, settings.workStart, settings.workEnd, settings.saturdayCompensation, saturdayLimitMinutes, getMinuteRate]);
+  }), [rows, baseSchedule, settings, parsedCompDays, saturdayLimitMinutes, getMinuteRate]);
 
   const totals = React.useMemo(() => {
     const selected = dayResults.filter((r) => r.selected);
@@ -414,10 +443,6 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
   }, [dayResults, targetValue]);
   const invalidInsideScheduleCount = React.useMemo(
     () => dayResults.filter((r) => r.selected && r.invalidInsideSchedule).length,
-    [dayResults]
-  );
-  const invalidSaturdayCount = React.useMemo(
-    () => dayResults.filter((r) => r.selected && r.invalidSaturdayWithoutCompensation).length,
     [dayResults]
   );
   const saturdayLimitCount = React.useMemo(
@@ -488,8 +513,8 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
         const dateB = parseISO(b.date);
         const dayA = isValid(dateA) ? dateA.getDay() : -1;
         const dayB = isValid(dateB) ? dateB.getDay() : -1;
-        const prioA = (preferSaturdayMax && dayA === 6 && settings.saturdayCompensation) ? 0 : (parsedCompDays.includes(dayA) ? 1 : 2);
-        const prioB = (preferSaturdayMax && dayB === 6 && settings.saturdayCompensation) ? 0 : (parsedCompDays.includes(dayB) ? 1 : 2);
+        const prioA = (preferSaturdayMax && dayA === 6) ? 0 : (parsedCompDays.includes(dayA) ? 1 : 2);
+        const prioB = (preferSaturdayMax && dayB === 6) ? 0 : (parsedCompDays.includes(dayB) ? 1 : 2);
         if (prioA !== prioB) return prioA - prioB;
         return a.date.localeCompare(b.date);
       });
@@ -497,30 +522,54 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
     for (const row of priorityOrder) {
       if (!row.selected) continue;
       const dateObj = parseISO(row.date);
-      const isSaturday = isValid(dateObj) && dateObj.getDay() === 6;
-      if (isSaturday && !settings.saturdayCompensation) continue;
-
-      const startRaw = isSaturday
-        ? normalizeTime(settings.saturdayWorkStart || '12:00', true)
-        : normalizeTime(baseSchedule.exit2 || settings.workEnd || '21:00', true);
-      const start = normalizeTime(startRaw, true);
-      if (!start || !start.includes(':')) continue;
+      const dayOfWeek = isValid(dateObj) ? dateObj.getDay() : -1;
+      const isSaturday = dayOfWeek === 6;
       const capH = Number((row.capacityHours || '0').replace(',', '.'));
       const rawCapMin = Math.max(0, Math.round((Number.isFinite(capH) ? capH : 0) * 60));
-      const capMin = isSaturday ? Math.min(rawCapMin, saturdayLimitMinutes) : rawCapMin;
+      const capMin = isSaturday
+        ? (preferSaturdayMax ? saturdayLimitMinutes : Math.min(rawCapMin, saturdayLimitMinutes))
+        : rawCapMin;
       if (capMin <= 0) continue;
-      const startMin = timeToMinutes(start);
-      let allocated = 0;
-      for (let i = 0; i < capMin; i++) {
+
+      if (isSaturday && settings.saturdayCompensation) {
+        const satStart = normalizeTime(settings.saturdayWorkStart || settings.workStart || '12:00', true);
+        const satStartMin = timeToMinutes(satStart);
+        const satAlloc = allocateByRate(row.date, satStartMin, capMin, remaining, getMinuteRate);
+        remaining = satAlloc.remaining;
+        if (satAlloc.allocated > 0) {
+          row.entryExtra = satStart;
+          row.exitExtra = formatHHMM(satStartMin + satAlloc.allocated);
+        }
         if (remaining <= 0) break;
-        const minuteOfDay = (startMin + i) % (24 * 60);
-        remaining -= getMinuteRate(row.date, minuteOfDay) / 60;
-        allocated += 1;
+        continue;
       }
-      if (allocated > 0) {
-        row.entry1 = start;
-        row.exit1 = formatHHMM(startMin + allocated);
+
+      const effective = getEffectiveScheduleForDay(dayOfWeek, baseSchedule, settings, parsedCompDays);
+      const scheduleStart = normalizeTime(effective.start, true);
+      const scheduleEnd = normalizeTime(effective.end, true);
+      if (!scheduleStart.includes(':') || !scheduleEnd.includes(':')) continue;
+
+      const afterStartMin = timeToMinutes(scheduleEnd);
+      const afterAlloc = allocateByRate(row.date, afterStartMin, capMin, remaining, getMinuteRate);
+      remaining = afterAlloc.remaining;
+      let remainingCap = Math.max(0, capMin - afterAlloc.allocated);
+
+      if (afterAlloc.allocated > 0) {
+        row.entryExtra = scheduleEnd;
+        row.exitExtra = formatHHMM(afterStartMin + afterAlloc.allocated);
       }
+
+      if (remainingCap > 0 && remaining > 0) {
+        const scheduleStartMin = timeToMinutes(scheduleStart);
+        const beforeStartMin = scheduleStartMin - remainingCap;
+        const beforeAlloc = allocateByRate(row.date, beforeStartMin, remainingCap, remaining, getMinuteRate);
+        remaining = beforeAlloc.remaining;
+        if (beforeAlloc.allocated > 0) {
+          row.entry1 = formatHHMM(scheduleStartMin - beforeAlloc.allocated);
+          row.exit1 = scheduleStart;
+        }
+      }
+
       if (remaining <= 0) break;
     }
 
@@ -579,12 +628,12 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
         </div>
 
         <div className="text-[11px] text-zinc-500 font-medium">Referencia: {referenceMonth} {isPlanLoading ? '(carregando planejamento...)' : ''}</div>
-        {settings.saturdayCompensation && <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">Regra ativa: com compensacao semanal, sabado e calculado em 100% (maximo {Math.round(saturdayLimitMinutes / 60)}h por sabado no sugestor).</div>}
+        {settings.saturdayCompensation && <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">Regra ativa: com compensacao semanal, os dias {compDaysLabel} recebem +1h na jornada; no sabado o sugestor prioriza ate {Math.round(saturdayLimitMinutes / 60)}h.</div>}
         <div className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2">
-          Dias configurados para compensacao: <span className="font-bold uppercase">{compDaysLabel}</span>. A sugestao prioriza: {preferSaturdayMax ? 'sabado, depois dias de compensacao, depois demais dias' : 'dias de compensacao, depois demais dias'}.
+          Dias configurados para compensacao: <span className="font-bold uppercase">{compDaysLabel}</span>. A sugestao prioriza: {preferSaturdayMax ? 'sabado (no limite), depois dias de compensacao, depois demais dias' : 'dias de compensacao, depois demais dias'}.
         </div>
         <div className="text-[11px] text-zinc-600 bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2">
-          Regra de simulacao: somente periodos fora da jornada normal contam como HE (antes da entrada ou apos a saida).
+          Regra de simulacao: somente periodos fora da jornada normal contam como HE (antes da entrada ou apos a saida), inclusive no sabado quando houver jornada.
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <label className="flex items-center gap-2 text-[11px] font-bold text-zinc-700 bg-zinc-50 border border-zinc-200 rounded-xl px-3 py-2">
@@ -634,11 +683,6 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
         {invalidInsideScheduleCount > 0 && (
           <div className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
             {invalidInsideScheduleCount} dia(s) com HE dentro da jornada normal foram ignorados no calculo.
-          </div>
-        )}
-        {invalidSaturdayCount > 0 && (
-          <div className="text-xs font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-            {invalidSaturdayCount} sabado(s) ignorados: so contam como extra quando a compensacao de sabado esta ativa.
           </div>
         )}
         {saturdayLimitCount > 0 && (
