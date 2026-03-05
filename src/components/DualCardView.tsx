@@ -309,22 +309,22 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
         </div>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-[11px]">
+        <table className="w-full min-w-[760px] text-[11px]">
           <thead>
             <tr className="text-left bg-zinc-50/50">
-              <th rowSpan={2} className="px-4 py-3 w-28 text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100">Dia</th>
-              <th colSpan={2} className="px-2 py-2 text-center text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100 border-l border-zinc-100 bg-zinc-100/30">Manhã</th>
-              <th colSpan={2} className="px-2 py-2 text-center text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100 border-l border-zinc-100 bg-zinc-100/30">Tarde</th>
-              <th colSpan={2} className="px-2 py-2 text-center text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100 border-l border-zinc-100 bg-zinc-100/30">Extra</th>
-              <th rowSpan={2} className="px-2 py-3 text-[10px] font-black uppercase tracking-widest text-zinc-400 text-right border-b border-zinc-100 border-l border-zinc-100">Total</th>
+              <th rowSpan={2} className="px-2 sm:px-4 py-2 sm:py-3 w-24 sm:w-28 text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100">Dia</th>
+              <th colSpan={2} className="px-1 sm:px-2 py-1.5 sm:py-2 text-center text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100 border-l border-zinc-100 bg-zinc-100/30">Manhã</th>
+              <th colSpan={2} className="px-1 sm:px-2 py-1.5 sm:py-2 text-center text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100 border-l border-zinc-100 bg-zinc-100/30">Tarde</th>
+              <th colSpan={2} className="px-1 sm:px-2 py-1.5 sm:py-2 text-center text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100 border-l border-zinc-100 bg-zinc-100/30">Extra</th>
+              <th rowSpan={2} className="px-1 sm:px-2 py-2 sm:py-3 text-[10px] font-black uppercase tracking-widest text-zinc-400 text-right border-b border-zinc-100 border-l border-zinc-100">Total</th>
             </tr>
             <tr className="text-left bg-zinc-50/50">
-              <th className="px-2 py-1.5 text-[9px] font-black uppercase text-zinc-400 border-l border-zinc-100 text-center">Ent.</th>
-              <th className="px-2 py-1.5 text-[9px] font-black uppercase text-zinc-400 text-center">Sai.</th>
-              <th className="px-2 py-1.5 text-[9px] font-black uppercase text-zinc-400 border-l border-zinc-100 text-center">Ent.</th>
-              <th className="px-2 py-1.5 text-[9px] font-black uppercase text-zinc-400 text-center">Sai.</th>
-              <th className="px-2 py-1.5 text-[9px] font-black uppercase text-zinc-400 border-l border-zinc-100 text-center">Ent.</th>
-              <th className="px-2 py-1.5 text-[9px] font-black uppercase text-zinc-400 text-center">Sai.</th>
+              <th className="px-1 sm:px-2 py-1 text-[9px] font-black uppercase text-zinc-400 border-l border-zinc-100 text-center">Ent.</th>
+              <th className="px-1 sm:px-2 py-1 text-[9px] font-black uppercase text-zinc-400 text-center">Sai.</th>
+              <th className="px-1 sm:px-2 py-1 text-[9px] font-black uppercase text-zinc-400 border-l border-zinc-100 text-center">Ent.</th>
+              <th className="px-1 sm:px-2 py-1 text-[9px] font-black uppercase text-zinc-400 text-center">Sai.</th>
+              <th className="px-1 sm:px-2 py-1 text-[9px] font-black uppercase text-zinc-400 border-l border-zinc-100 text-center">Ent.</th>
+              <th className="px-1 sm:px-2 py-1 text-[9px] font-black uppercase text-zinc-400 text-center">Sai.</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-50">
@@ -360,7 +360,7 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
 
               rows.push(
                 <tr key={`${side}-${e.day}`} className={cn("group transition-colors", isWeekend ? "bg-zinc-50/30" : "hover:bg-zinc-50/50")}>
-                  <td className="px-4 py-2 border-r border-zinc-50">
+                  <td className="px-2 sm:px-4 py-1.5 sm:py-2 border-r border-zinc-50">
                     <div className="flex items-center gap-1.5">
                       <span className="font-black text-zinc-900">{e.day}</span>
                       <span className="text-[10px] font-bold text-zinc-400 tracking-tighter truncate max-w-[60px]">{dayDisplayName}</span>
@@ -383,77 +383,77 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
                       )}
                     </div>
                   </td>
-                  <td className="px-1 py-1.5">
+                  <td className="px-0.5 sm:px-1 py-1">
                     <input
                       value={e.entry1 || ''}
                       onChange={ev => onEditTime(side, e.id, 'entry1', ev.target.value)}
                       onBlur={ev => onBlurTime(side, e.id, 'entry1', ev.target.value)}
-                      className="w-full px-1.5 py-1.5 rounded-lg border border-zinc-200 text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
+                      className="w-full px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg border border-zinc-200 text-[10px] sm:text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
                       placeholder="--:--"
                       inputMode="numeric"
                       maxLength={5}
                     />
                   </td>
-                  <td className="px-1 py-1.5 border-r border-zinc-50">
+                  <td className="px-0.5 sm:px-1 py-1 border-r border-zinc-50">
                     <input
                       value={e.exit1 || ''}
                       onChange={ev => onEditTime(side, e.id, 'exit1', ev.target.value)}
                       onBlur={ev => onBlurTime(side, e.id, 'exit1', ev.target.value)}
-                      className="w-full px-1.5 py-1.5 rounded-lg border border-zinc-200 text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
+                      className="w-full px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg border border-zinc-200 text-[10px] sm:text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
                       placeholder="--:--"
                       inputMode="numeric"
                       maxLength={5}
                     />
                   </td>
-                  <td className="px-1 py-1.5">
+                  <td className="px-0.5 sm:px-1 py-1">
                     <input
                       value={e.entry2 || ''}
                       onChange={ev => onEditTime(side, e.id, 'entry2', ev.target.value)}
                       onBlur={ev => onBlurTime(side, e.id, 'entry2', ev.target.value)}
-                      className="w-full px-1.5 py-1.5 rounded-lg border border-zinc-200 text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
+                      className="w-full px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg border border-zinc-200 text-[10px] sm:text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
                       placeholder="--:--"
                       inputMode="numeric"
                       maxLength={5}
                     />
                   </td>
-                  <td className="px-1 py-1.5 border-r border-zinc-50">
+                  <td className="px-0.5 sm:px-1 py-1 border-r border-zinc-50">
                     <input
                       value={e.exit2 || ''}
                       onChange={ev => onEditTime(side, e.id, 'exit2', ev.target.value)}
                       onBlur={ev => onBlurTime(side, e.id, 'exit2', ev.target.value)}
-                      className="w-full px-1.5 py-1.5 rounded-lg border border-zinc-200 text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
+                      className="w-full px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg border border-zinc-200 text-[10px] sm:text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
                       placeholder="--:--"
                       inputMode="numeric"
                       maxLength={5}
                     />
                   </td>
-                  <td className="px-1 py-1.5">
+                  <td className="px-0.5 sm:px-1 py-1">
                     <input
                       value={e.entryExtra || ''}
                       onChange={ev => onEditTime(side, e.id, 'entryExtra', ev.target.value)}
                       onBlur={ev => onBlurTime(side, e.id, 'entryExtra', ev.target.value)}
-                      className="w-full px-1.5 py-1.5 rounded-lg border border-zinc-200 text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
+                      className="w-full px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg border border-zinc-200 text-[10px] sm:text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
                       placeholder="--:--"
                       inputMode="numeric"
                       maxLength={5}
                     />
                   </td>
-                  <td className="px-1 py-1.5 border-r border-zinc-50">
+                  <td className="px-0.5 sm:px-1 py-1 border-r border-zinc-50">
                     <input
                       value={e.exitExtra || ''}
                       onChange={ev => onEditTime(side, e.id, 'exitExtra', ev.target.value)}
                       onBlur={ev => onBlurTime(side, e.id, 'exitExtra', ev.target.value)}
-                      className="w-full px-1.5 py-1.5 rounded-lg border border-zinc-200 text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
+                      className="w-full px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg border border-zinc-200 text-[10px] sm:text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
                       placeholder="--:--"
                       inputMode="numeric"
                       maxLength={5}
                     />
                   </td>
-                  <td className="px-2 py-1.5 text-right bg-zinc-50/20">
+                  <td className="px-1 sm:px-2 py-1 text-right bg-zinc-50/20">
                     {calcTotal(normalizedEntry) ? (
                       <span className="inline-flex items-center justify-end gap-1.5 font-black text-zinc-900 text-[11px]">
                         {calcTotal(normalizedEntry)}
-                        {discountMinutes > 0 && (
+                        {side === 'right' && discountMinutes > 0 && (
                           <span
                             className="inline-flex items-center text-amber-600"
                             title={`Desconto diario aplicado: ${discountLabel}`}
@@ -575,6 +575,8 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
     </div>
   );
 }
+
+
 
 
 
