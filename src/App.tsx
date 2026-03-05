@@ -8,6 +8,7 @@ import {
   LogIn,
   UserPlus,
   ChevronRight,
+  Menu,
   X,
   DollarSign
 } from 'lucide-react';
@@ -79,6 +80,7 @@ export default function App() {
   const [monthCache, setMonthCache] = useState<Record<string, any>>({});
   const [selectedMonth, setSelectedMonth] = useState<string>(''); // YYYY-MM
   const [isLoading, setIsLoading] = useState(true);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [monthData, setMonthData] = useState<any>(null);
   const [isMonthLoading, setIsMonthLoading] = useState(false);
   const [uploadContext, setUploadContext] = useState<{ month: string, isOvertime: boolean } | null>(null);
@@ -923,8 +925,73 @@ export default function App() {
           </div>
           <span className="font-black text-lg tracking-tighter">PontoSmart</span>
         </div>
-        <div className="text-[11px] font-semibold text-zinc-500 truncate max-w-[45vw]">{authUser.displayName || authUser.email}</div>
+        <button
+          type="button"
+          onClick={() => setIsMenuOpen((v) => !v)}
+          className="inline-flex items-center justify-center w-10 h-10 rounded-xl border border-zinc-200 bg-white text-zinc-700"
+        >
+          {isMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+        </button>
       </div>
+
+      {isMenuOpen && (
+        <button
+          type="button"
+          aria-label="Fechar menu"
+          className="md:hidden fixed inset-0 bg-zinc-950/35 z-40"
+          onClick={() => setIsMenuOpen(false)}
+        />
+      )}
+
+      <aside
+        className={cn(
+          "md:hidden fixed inset-y-0 left-0 z-50 w-[88vw] max-w-80 bg-white border-r border-zinc-100 shadow-xl transition-transform flex flex-col",
+          isMenuOpen ? "translate-x-0" : "-translate-x-full"
+        )}
+        style={{ paddingTop: 'calc(env(safe-area-inset-top) + 0.5rem)' }}
+      >
+        <div className="px-5 pb-3">
+          <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Conta</div>
+          <div className="text-sm font-extrabold text-zinc-900 truncate">{authUser.displayName || authUser.email}</div>
+          <div className="text-[11px] text-zinc-500 truncate">{authUser.email}</div>
+        </div>
+
+        <nav className="flex-1 px-4 space-y-2 overflow-y-auto">
+          {navItems.map(item => (
+            <button
+              key={item.id}
+              onClick={() => { setView(item.id as View); setIsMenuOpen(false); }}
+              className={cn(
+                "w-full flex items-center gap-3 px-4 py-4 rounded-2xl font-bold transition-all",
+                view === item.id
+                  ? "bg-zinc-900 text-white shadow-xl shadow-zinc-200"
+                  : "text-zinc-400 hover:text-zinc-900 hover:bg-zinc-50"
+              )}
+            >
+              <item.icon className="w-5 h-5" />
+              {item.label}
+              {view === item.id && <ChevronRight className="w-4 h-4 ml-auto opacity-50" />}
+            </button>
+          ))}
+        </nav>
+
+        <div className="p-4 border-t border-zinc-100">
+          <button
+            onClick={() => { setIsMenuOpen(false); logout(); }}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-all mb-2"
+          >
+            <LogOut className="w-5 h-5" />
+            Sair da Conta
+          </button>
+          <button
+            onClick={() => { setIsMenuOpen(false); clearData(); }}
+            className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold text-red-500 hover:bg-red-50 hover:text-red-600 transition-all"
+          >
+            <X className="w-5 h-5" />
+            Limpar Dados
+          </button>
+        </div>
+      </aside>
 
       {/* Sidebar */}
       <aside className="hidden md:flex md:relative md:w-72 bg-white border-r border-zinc-100 flex-col">
@@ -1441,6 +1508,7 @@ export default function App() {
               type="button"
               onClick={() => {
                 setView(item.id as View);
+                setIsMenuOpen(false);
               }}
               className={cn(
                 "flex flex-col items-center justify-center gap-1 rounded-xl py-2 text-[11px] font-bold transition-colors",
