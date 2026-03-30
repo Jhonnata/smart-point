@@ -102,18 +102,12 @@ function finalizeTotals(rows: CardRow[]) {
   });
 }
 
-function getCustomWeekKey(date: Date): string {
-  const dayOfMonth = date.getDate();
-  const monthYear = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-  const firstOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
-  const dayOfWeekFirstOfMonth = ((firstOfMonth.getDay() + 6) % 7) + 1; // Monday=1 ... Sunday=7
-  const daysUntilFirstSunday = 7 - (dayOfWeekFirstOfMonth % 7);
-
-  let weekIndex = 1;
-  if (dayOfMonth > daysUntilFirstSunday) {
-    weekIndex = 1 + Math.ceil((dayOfMonth - daysUntilFirstSunday) / 7);
-  }
-  return `${monthYear}-W${weekIndex}`;
+function getRealWeekKey(date: Date): string {
+  const base = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = base.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  base.setDate(base.getDate() + diffToMonday);
+  return `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}-${String(base.getDate()).padStart(2, '0')}`;
 }
 
 function isNightMinute(minuteOfDay: number, nightCutoffMinutes: number): boolean {
@@ -156,13 +150,14 @@ function buildDayPlans(rows: CardRow[], settings: Settings): DayPlan[] {
   const saturdayStartMin = timeToMinutes(settings.saturdayWorkStart || '12:00');
   const saturdayEndMin = timeToMinutes(settings.saturdayWorkEnd || '16:00');
   const nightStartMin = Math.max(0, timeToMinutes(settings.nightCutoff || '22:00'));
+  const compDays = parseCompDays(settings.compDays);
 
   return rows
     .map((row) => {
       const dateObj = parseISO(row.date);
       if (!isValid(dateObj)) return null;
       const dayOfWeek = dateObj.getDay();
-      const weekKey = getCustomWeekKey(dateObj);
+      const weekKey = getRealWeekKey(dateObj);
 
       const slots: SlotPlan[] = [];
 
@@ -188,10 +183,13 @@ function buildDayPlans(rows: CardRow[], settings: Settings): DayPlan[] {
           isSaturday(dayOfWeek) && !settings.saturdayCompensation
             ? saturdayStartMin
             : workStartMin;
-        const baseEnd =
+        let baseEnd =
           isSaturday(dayOfWeek) && !settings.saturdayCompensation
             ? saturdayEndMin
             : workEndMin;
+        if (settings.saturdayCompensation && compDays.includes(dayOfWeek)) {
+          baseEnd += 60;
+        }
 
         const beforeStart = Math.max(0, baseStart - 120);
         const beforeEnd = baseStart;

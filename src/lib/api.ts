@@ -82,9 +82,13 @@ export function apiFetch(path: string, init?: RequestInit): Promise<Response> {
     headers.set('Authorization', `Bearer ${token}`);
   }
 
+  const isCrossOriginApi = !!normalizedApiBase && typeof window !== 'undefined'
+    ? !apiUrl(path).startsWith(window.location.origin)
+    : false;
+
   return fetch(apiUrl(path), {
     ...init,
-    credentials: init?.credentials ?? 'include',
+    credentials: init?.credentials ?? (isCrossOriginApi ? 'omit' : 'same-origin'),
     headers
   });
 }

@@ -6,6 +6,7 @@ import {
   PlusCircle,
   LogOut,
   LogIn,
+  KeyRound,
   UserPlus,
   ChevronRight,
   Menu,
@@ -25,17 +26,25 @@ import type { Settings } from './lib/calculations';
 import type { TimeEntry } from './services/aiService';
 import { cn } from './lib/utils';
 import { apiFetch, clearStoredAuthToken, isApiUnavailableInCurrentHost, setStoredAuthToken } from './lib/api';
+import { getSupabasePasswordResetRedirectUrl, isSupabaseConfigured, isSupabasePasswordRecoveryMode, supabase } from './lib/supabase';
+import { clearReferences, deleteReference, getReference, getSettings, listHoleriths, saveReference, saveSettings as saveSupabaseSettings } from './lib/supabaseData';
 import { parseISO, isValid, format as formatDate } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 type View = 'dashboard' | 'resumo' | 'holerith' | 'card' | 'card-list' | 'upload' | 'settings';
 type CardSaveMode = 'merge' | 'replace';
-type AuthMode = 'login' | 'register';
+type AuthMode = 'login' | 'register' | 'forgot' | 'reset';
 type AuthUser = {
-  id: number;
+  id: string;
   email: string;
   username?: string;
   displayName: string;
+};
+
+type ForgotPasswordResponse = {
+  message?: string;
+  debugResetToken?: string;
+  debugResetUrl?: string;
 };
 
 const AUTH_USER_STORAGE_KEY = 'smart_point_auth_user';
@@ -45,7 +54,7 @@ function loadStoredAuthUser(): AuthUser | null {
   const parseRaw = (raw: string | null): AuthUser | null => {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
-    const id = Number(parsed?.id || 0);
+    const id = String(parsed?.id || '').trim();
     const email = String(parsed?.email || parsed?.username || '').trim().toLowerCase();
     if (!id || !email) return null;
     return {
@@ -68,6 +77,17 @@ function loadStoredAuthUser(): AuthUser | null {
   }
 }
 
+function readResetTokenFromHash(): string {
+  if (typeof window === 'undefined') return '';
+  const hash = String(window.location.hash || '');
+  if (!hash.startsWith('#reset-password')) return '';
+  const queryIndex = hash.indexOf('?');
+  if (queryIndex < 0) return '';
+  const query = hash.slice(queryIndex + 1);
+  const params = new URLSearchParams(query);
+  return String(params.get('token') || '').trim();
+}
+
 export default function App() {
   const [view, setView] = useState<View>(() => {
     const hash = window.location.hash.replace('#', '') as View;
@@ -88,19 +108,25 @@ export default function App() {
   const [localProjectedByMonth, setLocalProjectedByMonth] = useState<Record<string, any>>({});
   const [authUser, setAuthUser] = useState<AuthUser | null>(() => loadStoredAuthUser());
   const [authLoading, setAuthLoading] = useState(true);
-  const [authMode, setAuthMode] = useState<AuthMode>('login');
+  const initialResetToken = readResetTokenFromHash();
+  const [authMode, setAuthMode] = useState<AuthMode>(initialResetToken ? 'reset' : 'login');
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [authForm, setAuthForm] = useState({
     email: '',
     password: '',
-    displayName: ''
+    displayName: '',
+    confirmPassword: '',
+    resetToken: initialResetToken
   });
+  const [forgotPasswordState, setForgotPasswordState] = useState<ForgotPasswordResponse | null>(null);
   const apiUnavailable = React.useMemo(() => isApiUnavailableInCurrentHost(), []);
+  const useSupabaseData = React.useMemo(() => isSupabaseConfigured, []);
+  const useSupabaseAuth = useSupabaseData;
 
   const normalizeAuthUser = React.useCallback((raw: any): AuthUser | null => {
     if (!raw || typeof raw !== 'object') return null;
     const email = String(raw.email || raw.username || '').trim().toLowerCase();
-    const id = Number(raw.id || 0);
+    const id = String(raw.id || '').trim();
     if (!id || !email) return null;
     return {
       id,
@@ -221,14 +247,21 @@ export default function App() {
 
   const fetchReferenceByMonth = React.useCallback(async (monthKey: string) => {
     const ref = refFromMonthKey(monthKey);
+    if (useSupabaseData) {
+      return await getReference(ref);
+    }
     const res = await apiFetch(`/api/referencia/${ref}`);
     if (!res.ok) return null;
     return await res.json();
-  }, [refFromMonthKey]);
+  }, [refFromMonthKey, useSupabaseData]);
 
   const refreshHolerithsAndCache = React.useCallback(async (focusMonth?: string) => {
-    const holRes = await apiFetch('/api/holeriths');
-    const holData = holRes.ok ? await holRes.json() as any[] : [];
+    const holData = useSupabaseData
+      ? await listHoleriths()
+      : await (async () => {
+          const holRes = await apiFetch('/api/holeriths');
+          return holRes.ok ? await holRes.json() as any[] : [];
+        })();
     const months = [...new Set((holData || []).map(monthKeyFromHolerith))].sort().reverse();
 
     const refPairs = await Promise.all(months.map(async (monthKey) => {
@@ -252,7 +285,7 @@ export default function App() {
     if (nextSelected !== selectedMonth) {
       setSelectedMonth(nextSelected);
     }
-  }, [fetchReferenceByMonth, monthKeyFromHolerith, rebuildEntriesFromCache, selectedMonth]);
+  }, [fetchReferenceByMonth, monthKeyFromHolerith, rebuildEntriesFromCache, selectedMonth, useSupabaseData]);
 
   useEffect(() => {
     if (!selectedMonth) {
@@ -313,6 +346,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const syncResetTokenFromHash = () => {
+      const token = readResetTokenFromHash();
+      if (!token) return;
+      setAuthMode('reset');
+      setAuthForm((prev) => ({ ...prev, resetToken: token }));
+    };
+
+    syncResetTokenFromHash();
+    window.addEventListener('hashchange', syncResetTokenFromHash);
+    return () => window.removeEventListener('hashchange', syncResetTokenFromHash);
+  }, []);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
     const payload = authUser ? JSON.stringify(authUser) : null;
     try {
@@ -338,6 +384,30 @@ export default function App() {
     let cancelled = false;
     const bootstrapAuth = async () => {
       setAuthLoading(true);
+      if (useSupabaseAuth && supabase) {
+        try {
+          const { data } = await supabase.auth.getUser();
+          if (!cancelled) {
+            const user = data?.user;
+            setAuthUser(user ? {
+              id: String(user.id),
+              email: String(user.email || '').trim().toLowerCase(),
+              username: String(user.email || '').trim().toLowerCase(),
+              displayName: String(user.user_metadata?.display_name || user.email || '')
+            } : null);
+            if (isSupabasePasswordRecoveryMode()) {
+              setAuthMode('reset');
+            }
+          }
+        } catch (err) {
+          console.error('Error checking Supabase session:', err);
+          if (!cancelled) setAuthUser(null);
+        } finally {
+          if (!cancelled) setAuthLoading(false);
+        }
+        return;
+      }
+
       if (apiUnavailable) {
         if (!cancelled) {
           setAuthUser(null);
@@ -366,7 +436,25 @@ export default function App() {
     };
     bootstrapAuth();
     return () => { cancelled = true; };
-  }, [normalizeAuthUser, apiUnavailable]);
+  }, [normalizeAuthUser, apiUnavailable, useSupabaseAuth]);
+
+  useEffect(() => {
+    if (!useSupabaseAuth || !supabase) return;
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      const user = session?.user;
+      setAuthUser(user ? {
+        id: String(user.id),
+        email: String(user.email || '').trim().toLowerCase(),
+        username: String(user.email || '').trim().toLowerCase(),
+        displayName: String(user.user_metadata?.display_name || user.email || '')
+      } : null);
+      if (event === 'PASSWORD_RECOVERY') {
+        setAuthMode('reset');
+      }
+    });
+
+    return () => listener.subscription.unsubscribe();
+  }, [useSupabaseAuth]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -480,7 +568,7 @@ export default function App() {
   }, [monthHoursEntries, monthHeEntries, settings, monthData]);
 
   const submitAuth = async (mode: AuthMode) => {
-    if (apiUnavailable) {
+    if (apiUnavailable && !useSupabaseAuth) {
       toast.error('API nao configurada. Defina VITE_API_BASE_URL para o backend.');
       return;
     }
@@ -502,6 +590,51 @@ export default function App() {
 
     setAuthSubmitting(true);
     try {
+      if (useSupabaseAuth && supabase) {
+        if (mode === 'login') {
+          const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+          if (error) throw error;
+          const user = data.user;
+          if (!user?.id) throw new Error('Sessao nao retornada pelo Supabase.');
+          setAuthUser({
+            id: String(user.id),
+            email,
+            username: email,
+            displayName: String(user.user_metadata?.display_name || user.email || email)
+          });
+          setSettings(null);
+          setAuthForm((prev) => ({ ...prev, password: '', confirmPassword: '' }));
+          setForgotPasswordState(null);
+          toast.success('Login realizado.');
+          return;
+        }
+
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: {
+              display_name: displayName
+            }
+          }
+        });
+        if (error) throw error;
+        const user = data.user;
+        if (user?.id) {
+          setAuthUser({
+            id: String(user.id),
+            email,
+            username: email,
+            displayName: String(user.user_metadata?.display_name || displayName || user.email || email)
+          });
+        }
+        setSettings(null);
+        setAuthForm((prev) => ({ ...prev, password: '', confirmPassword: '' }));
+        setForgotPasswordState(null);
+        toast.success('Conta criada com sucesso. Verifique seu e-mail se a confirmacao estiver habilitada.');
+        return;
+      }
+
       const res = await apiFetch(mode === 'login' ? '/api/auth/login' : '/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -525,7 +658,8 @@ export default function App() {
 
       setAuthUser(user);
       setSettings(null);
-      setAuthForm((prev) => ({ ...prev, password: '' }));
+      setAuthForm((prev) => ({ ...prev, password: '', confirmPassword: '' }));
+      setForgotPasswordState(null);
       toast.success(mode === 'login' ? 'Login realizado.' : 'Conta criada com sucesso.');
     } catch (err: any) {
       toast.error(err?.message || 'Erro na autenticação.');
@@ -534,22 +668,163 @@ export default function App() {
     }
   };
 
+  const requestPasswordReset = async () => {
+    if (apiUnavailable && !useSupabaseAuth) {
+      toast.error('API nao configurada. Defina VITE_API_BASE_URL para o backend.');
+      return;
+    }
+    const email = authForm.email.trim().toLowerCase();
+    if (!email) {
+      toast.error('Informe o e-mail da conta.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      toast.error('Informe um e-mail valido.');
+      return;
+    }
+
+    setAuthSubmitting(true);
+    try {
+      if (useSupabaseAuth && supabase) {
+        const { error } = await supabase.auth.resetPasswordForEmail(email, {
+          redirectTo: getSupabasePasswordResetRedirectUrl()
+        });
+        if (error) throw error;
+        setForgotPasswordState({
+          message: 'Se o e-mail existir, o link de recuperacao foi enviado.'
+        });
+        toast.success('Se o e-mail existir, o link de recuperacao foi enviado.');
+        return;
+      }
+
+      const res = await apiFetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || 'Falha ao solicitar recuperacao.');
+      }
+
+      const response = data as ForgotPasswordResponse;
+      setForgotPasswordState(response);
+      if (response.debugResetToken) {
+        setAuthForm((prev) => ({ ...prev, resetToken: response.debugResetToken || '', password: '', confirmPassword: '' }));
+        setAuthMode('reset');
+      }
+      toast.success(response.message || 'Se o e-mail existir, a recuperacao foi iniciada.');
+    } catch (err: any) {
+      toast.error(err?.message || 'Falha ao solicitar recuperacao.');
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
+  const resetPassword = async () => {
+    if (apiUnavailable && !useSupabaseAuth) {
+      toast.error('API nao configurada. Defina VITE_API_BASE_URL para o backend.');
+      return;
+    }
+    const password = authForm.password;
+    const confirmPassword = authForm.confirmPassword;
+
+    if (!password) {
+      toast.error('Informe a nova senha.');
+      return;
+    }
+    if (password.length < 6) {
+      toast.error('A senha deve ter no minimo 6 caracteres.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      toast.error('A confirmacao de senha nao confere.');
+      return;
+    }
+
+    setAuthSubmitting(true);
+    try {
+      if (useSupabaseAuth && supabase) {
+        const { error } = await supabase.auth.updateUser({ password });
+        if (error) throw error;
+        setForgotPasswordState(null);
+        setAuthMode('login');
+        setAuthForm((prev) => ({
+          ...prev,
+          password: '',
+          confirmPassword: '',
+          resetToken: '',
+        }));
+        if (typeof window !== 'undefined' && isSupabasePasswordRecoveryMode()) {
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+        toast.success('Senha redefinida. Faça login com a nova senha.');
+        return;
+      }
+
+      const token = authForm.resetToken.trim();
+      if (!token) {
+        toast.error('Informe o token de recuperacao.');
+        return;
+      }
+
+      const res = await apiFetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, password })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data?.error || 'Falha ao redefinir senha.');
+      }
+
+      clearStoredAuthToken();
+      setForgotPasswordState(null);
+      setAuthMode('login');
+      setAuthForm((prev) => ({
+        ...prev,
+        password: '',
+        confirmPassword: '',
+        resetToken: '',
+      }));
+      if (typeof window !== 'undefined' && window.location.hash.startsWith('#reset-password')) {
+        window.location.hash = 'login';
+      }
+      toast.success('Senha redefinida. Faça login com a nova senha.');
+    } catch (err: any) {
+      toast.error(err?.message || 'Falha ao redefinir senha.');
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
+
   const logout = async () => {
     try {
-      await apiFetch('/api/auth/logout', { method: 'POST' });
+      if (useSupabaseAuth && supabase) {
+        await supabase.auth.signOut();
+      } else {
+        await apiFetch('/api/auth/logout', { method: 'POST' });
+      }
     } catch (err) {
       console.error('Error during logout:', err);
     } finally {
       clearStoredAuthToken();
       setAuthUser(null);
       setSettings(null);
-      setAuthForm((prev) => ({ ...prev, password: '' }));
+      setAuthForm((prev) => ({ ...prev, password: '', confirmPassword: '', resetToken: '' }));
+      setForgotPasswordState(null);
       setAuthMode('login');
     }
   };
   const fetchData = async () => {
     setIsLoading(true);
     try {
+      if (useSupabaseData) {
+        const settingsData = await getSettings();
+        setSettings(settingsData);
+        await refreshHolerithsAndCache();
+        return;
+      }
       const sRes = await apiFetch('/api/settings');
       if (sRes.status === 401) {
         clearStoredAuthToken();
@@ -571,6 +846,13 @@ export default function App() {
 
   const saveSettings = async (newSettings: Settings) => {
     try {
+      if (useSupabaseData) {
+        await saveSupabaseSettings(newSettings);
+        setSettings(newSettings);
+        toast.success("ConfiguraÃ§Ãµes salvas!");
+        setView('dashboard');
+        return;
+      }
       const res = await apiFetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -605,17 +887,21 @@ export default function App() {
     const ref = `${payload.month}${payload.year}`;
     console.log(`Saving card via POST /api/referencia/${ref}`);
     try {
-      const res = await apiFetch(`/api/referencia/${ref}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `HTTP error! status: ${res.status}`);
+      if (useSupabaseData) {
+        await saveReference(ref, payload);
+      } else {
+        const res = await apiFetch(`/api/referencia/${ref}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `HTTP error! status: ${res.status}`);
+        }
+        const data = await res.json();
+        console.log('Save response:', data);
       }
-      const data = await res.json();
-      console.log('Save response:', data);
 
       const monthKey = `${payload.year}-${String(payload.month).padStart(2, '0')}`;
       await refreshHolerithsAndCache(monthKey);
@@ -626,9 +912,12 @@ export default function App() {
         return next;
       });
 
-      const mRes = await apiFetch(`/api/referencia/${ref}`);
-      if (mRes.ok) {
-        const mData = await mRes.json();
+      const mData = useSupabaseData ? await getReference(ref) : await (async () => {
+        const mRes = await apiFetch(`/api/referencia/${ref}`);
+        if (!mRes.ok) return null;
+        return await mRes.json();
+      })();
+      if (mData) {
         setMonthData(mData);
         setMonthCache(prev => ({ ...prev, [monthKey]: mData }));
       }
@@ -702,10 +991,14 @@ export default function App() {
       const currentUpdateMode: CardSaveMode = pendingCardSaveMode || 'merge';
       if (currentUpdateMode === 'replace') {
         const ref = `${String(refMonth).padStart(2, '0')}${refYear}`;
-        const delRes = await apiFetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
-        if (!delRes.ok && delRes.status !== 404) {
-          const delErr = await delRes.json().catch(() => ({}));
-          throw new Error(delErr.error || `Falha ao limpar competencia para substituicao (${delRes.status}).`);
+        if (useSupabaseData) {
+          await deleteReference(ref, 'all');
+        } else {
+          const delRes = await apiFetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
+          if (!delRes.ok && delRes.status !== 404) {
+            const delErr = await delRes.json().catch(() => ({}));
+            throw new Error(delErr.error || `Falha ao limpar competencia para substituicao (${delRes.status}).`);
+          }
         }
       }
 
@@ -730,9 +1023,13 @@ export default function App() {
         onClick: async () => {
           try {
             console.log('Calling DELETE /api/referencias');
-            const res = await apiFetch('/api/referencias', { method: 'DELETE' });
-            if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-            const data = await res.json();
+            const data = useSupabaseData
+              ? await clearReferences()
+              : await (async () => {
+                  const res = await apiFetch('/api/referencias', { method: 'DELETE' });
+                  if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                  return await res.json();
+                })();
             console.log('Clear data response:', data);
             setEntries([]);
             setHoleriths([]);
@@ -767,9 +1064,13 @@ export default function App() {
             const [year, mm] = month.split('-');
             const ref = `${mm}${year}`;
             console.log(`Calling DELETE /api/referencia/${ref}?type=all`);
-            const res = await apiFetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
-            if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-            const data = await res.json();
+            const data = useSupabaseData
+              ? await deleteReference(ref, 'all')
+              : await (async () => {
+                  const res = await apiFetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
+                  if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+                  return await res.json();
+                })();
             console.log('Delete response:', data);
 
             await refreshHolerithsAndCache();
@@ -820,7 +1121,10 @@ export default function App() {
           <div className="flex items-center gap-2 bg-zinc-100 rounded-xl p-1 mb-4 sm:mb-5">
             <button
               type="button"
-              onClick={() => setAuthMode('login')}
+              onClick={() => {
+                setAuthMode('login');
+                setForgotPasswordState(null);
+              }}
               className={cn(
                 'flex-1 rounded-lg py-2.5 text-sm font-bold transition',
                 authMode === 'login' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'
@@ -830,7 +1134,10 @@ export default function App() {
             </button>
             <button
               type="button"
-              onClick={() => setAuthMode('register')}
+              onClick={() => {
+                setAuthMode('register');
+                setForgotPasswordState(null);
+              }}
               className={cn(
                 'flex-1 rounded-lg py-2.5 text-sm font-bold transition',
                 authMode === 'register' ? 'bg-white text-zinc-900 shadow-sm' : 'text-zinc-500'
@@ -844,6 +1151,14 @@ export default function App() {
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault();
+              if (authMode === 'forgot') {
+                requestPasswordReset();
+                return;
+              }
+              if (authMode === 'reset') {
+                resetPassword();
+                return;
+              }
               submitAuth(authMode);
             }}
           >
@@ -855,38 +1170,115 @@ export default function App() {
                 placeholder="Nome de exibição"
               />
             )}
-            <input
-              value={authForm.email}
-              onChange={(e) => setAuthForm((prev) => ({ ...prev, email: e.target.value }))}
-              className="w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-zinc-900"
-              placeholder="E-mail"
-              autoComplete="email"
-            />
-            <input
-              type="password"
-              value={authForm.password}
-              onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))}
-              className="w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-zinc-900"
-              placeholder="Senha"
-              autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
-            />
+            {(authMode === 'forgot' || authMode === 'login' || authMode === 'register') && (
+              <input
+                value={authForm.email}
+                onChange={(e) => setAuthForm((prev) => ({ ...prev, email: e.target.value }))}
+                className="w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                placeholder="E-mail"
+                autoComplete="email"
+              />
+            )}
+            {authMode === 'reset' && !useSupabaseAuth && (
+              <input
+                value={authForm.resetToken}
+                onChange={(e) => setAuthForm((prev) => ({ ...prev, resetToken: e.target.value }))}
+                className="w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                placeholder="Token de recuperacao"
+                autoComplete="one-time-code"
+              />
+            )}
+            {(authMode === 'login' || authMode === 'register' || authMode === 'reset') && (
+              <input
+                type="password"
+                value={authForm.password}
+                onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))}
+                className="w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                placeholder={authMode === 'reset' ? 'Nova senha' : 'Senha'}
+                autoComplete={authMode === 'login' ? 'current-password' : 'new-password'}
+              />
+            )}
+            {authMode === 'reset' && (
+              <input
+                type="password"
+                value={authForm.confirmPassword}
+                onChange={(e) => setAuthForm((prev) => ({ ...prev, confirmPassword: e.target.value }))}
+                className="w-full rounded-xl border border-zinc-200 px-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-zinc-900"
+                placeholder="Confirmar nova senha"
+                autoComplete="new-password"
+              />
+            )}
 
             <button
               type="submit"
-              disabled={authSubmitting || apiUnavailable}
+              disabled={authSubmitting || (apiUnavailable && !useSupabaseAuth)}
               className="w-full mt-2 rounded-xl bg-zinc-900 text-white py-3 font-bold disabled:opacity-60 flex items-center justify-center gap-2"
             >
-              {authMode === 'login' ? <LogIn className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
-              {authSubmitting ? 'Aguarde...' : (authMode === 'login' ? 'Entrar' : 'Criar conta')}
+              {authMode === 'login' && <LogIn className="w-4 h-4" />}
+              {authMode === 'register' && <UserPlus className="w-4 h-4" />}
+              {(authMode === 'forgot' || authMode === 'reset') && <KeyRound className="w-4 h-4" />}
+              {authSubmitting ? 'Aguarde...' : (
+                authMode === 'login'
+                  ? 'Entrar'
+                  : authMode === 'register'
+                    ? 'Criar conta'
+                    : authMode === 'forgot'
+                      ? 'Enviar recuperacao'
+                      : 'Redefinir senha'
+              )}
             </button>
           </form>
-          {apiUnavailable && (
+          {authMode === 'login' && (
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode('forgot');
+                setForgotPasswordState(null);
+              }}
+              className="mt-3 text-sm font-semibold text-zinc-600 hover:text-zinc-900"
+            >
+              Esqueci minha senha
+            </button>
+          )}
+          {authMode === 'forgot' && (
+            <button
+              type="button"
+              onClick={() => setAuthMode('reset')}
+              className="mt-3 text-sm font-semibold text-zinc-600 hover:text-zinc-900"
+            >
+              {useSupabaseAuth ? 'Abri o link de recuperacao' : 'Ja tenho um token de recuperacao'}
+            </button>
+          )}
+          {authMode !== 'login' && authMode !== 'register' && (
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode('login');
+                setForgotPasswordState(null);
+              }}
+              className="mt-2 text-sm font-semibold text-zinc-500 hover:text-zinc-900"
+            >
+              Voltar para login
+            </button>
+          )}
+          {forgotPasswordState?.debugResetToken && !useSupabaseAuth && (
+            <div className="mt-4 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-3 text-xs text-zinc-700">
+              <p className="font-bold text-zinc-900">Token de recuperacao</p>
+              <p className="mt-1 break-all font-mono">{forgotPasswordState.debugResetToken}</p>
+              {forgotPasswordState.debugResetUrl && (
+                <p className="mt-2 break-all">{forgotPasswordState.debugResetUrl}</p>
+              )}
+            </div>
+          )}
+          {apiUnavailable && !useSupabaseAuth && (
             <p className="mt-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
               GitHub Pages publica apenas frontend estatico. Configure VITE_API_BASE_URL para um backend com as rotas /api.
             </p>
           )}
           <p className="mt-4 text-xs text-zinc-500">
-            Não compartilhe sua senha. Para novo acesso, use a aba <span className="font-bold">Criar conta</span>.
+            {useSupabaseAuth
+              ? 'Nao compartilhe sua senha. A recuperacao no Supabase envia um link por e-mail para definir a nova senha.'
+              : 'Nao compartilhe sua senha. A recuperacao gera um token temporario valido por 30 minutos.'}
           </p>
           <Toaster position="top-center" richColors />
         </div>
@@ -1294,9 +1686,13 @@ export default function App() {
 
                 if (updateMode === 'replace') {
                   const ref = `${mm}${year}`;
-                  const delRes = await apiFetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
-                  if (!delRes.ok && delRes.status !== 404) {
-                    throw new Error(`Falha ao limpar competencia para substituicao (${delRes.status}).`);
+                  if (useSupabaseData) {
+                    await deleteReference(ref, 'all');
+                  } else {
+                    const delRes = await apiFetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
+                    if (!delRes.ok && delRes.status !== 404) {
+                      throw new Error(`Falha ao limpar competencia para substituicao (${delRes.status}).`);
+                    }
                   }
                 }
 
@@ -1331,11 +1727,15 @@ export default function App() {
                   }
                   if (Object.keys(toFill).length > 0) {
                     const updatedSettings = { ...settings, ...toFill } as Settings;
-                    await apiFetch('/api/settings', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify(updatedSettings)
-                    });
+                    if (useSupabaseData) {
+                      await saveSupabaseSettings(updatedSettings);
+                    } else {
+                      await apiFetch('/api/settings', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(updatedSettings)
+                      });
+                    }
                     setSettings(updatedSettings);
                   }
                 }
@@ -1379,8 +1779,12 @@ export default function App() {
                 }
                 
                 // Buscar dados existentes do mês para preservar o outro tipo de cartão
-                const existingRef = await apiFetch(`/api/referencia/${refMonth}${refYear}`);
-                const existingMonthData = existingRef.ok ? await existingRef.json() : { hours: [], he: [], hasNormalCard: false, hasOvertimeCard: false };
+                const existingMonthData = useSupabaseData
+                  ? await getReference(`${refMonth}${refYear}`)
+                  : await (async () => {
+                      const existingRef = await apiFetch(`/api/referencia/${refMonth}${refYear}`);
+                      return existingRef.ok ? await existingRef.json() : { hours: [], he: [], hasNormalCard: false, hasOvertimeCard: false };
+                    })();
                 const existingHours = existingMonthData.hasNormalCard ? (existingMonthData.hours || []) : [];
                 const existingHe = existingMonthData.hasOvertimeCard ? (existingMonthData.he || []) : [];
 

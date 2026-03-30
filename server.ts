@@ -1,5 +1,7 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 import Database from "better-sqlite3";
 import path from "path";
 import crypto from "crypto";
@@ -163,6 +165,15 @@ db.exec(`
     createdAt   TEXT DEFAULT (datetime('now'))
   );
 
+  CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id          INTEGER PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tokenHash   TEXT NOT NULL UNIQUE,
+    expiresAt   TEXT NOT NULL,
+    usedAt      TEXT,
+    createdAt   TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS banco_horas (
     id          INTEGER PRIMARY KEY,
     holerith_id INTEGER REFERENCES holeriths(id) ON DELETE CASCADE,
@@ -293,6 +304,8 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
   CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
   CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expiresAt);
+  CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user ON password_reset_tokens(user_id);
+  CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_expires ON password_reset_tokens(expiresAt);
   CREATE INDEX IF NOT EXISTS idx_simulator_plans_ref ON simulator_plans(reference);
   CREATE INDEX IF NOT EXISTS idx_simulator_plans_employee_ref ON simulator_plans(employee_id, reference);
 `);
@@ -464,25 +477,32 @@ function normalizeOrigin(raw: string): string {
   }
 }
 
-function resolveAllowedOrigins(): Set<string> {
-  const configured = String(process.env.FRONTEND_ORIGIN || "")
-    .split(",")
+function isTruthyEnvFlag(raw: any): boolean {
+  const value = String(raw || "").trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+function resolveCorsConfig(): { allowedOrigins: Set<string>; allowAnyOrigin: boolean } {
+  const configured = [
+    ...String(process.env.FRONTEND_ORIGIN || "").split(","),
+    String(process.env.APP_URL || "")
+  ]
     .map((v) => normalizeOrigin(v))
     .filter(Boolean);
 
-  if (configured.length === 0) {
-    configured.push("https://jhonnata.github.io");
-    if (process.env.NODE_ENV !== "production") {
-      configured.push(
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173"
-      );
-    }
+  if (process.env.NODE_ENV !== "production") {
+    configured.push(
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "http://localhost:5173",
+      "http://127.0.0.1:5173"
+    );
   }
 
-  return new Set(configured);
+  return {
+    allowedOrigins: new Set(configured),
+    allowAnyOrigin: isTruthyEnvFlag(process.env.CORS_ALLOW_ALL_ORIGINS) || configured.length === 0
+  };
 }
 
 function resolveCookieSameSiteOverride(): "Lax" | "Strict" | "None" | null {
@@ -518,6 +538,10 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+function hashResetToken(token: string): string {
+  return crypto.createHash("sha256").update(token).digest("hex");
+}
+
 function createSession(userId: number): string {
   const token = crypto.randomBytes(32).toString("hex");
   db.prepare(`
@@ -525,6 +549,49 @@ function createSession(userId: number): string {
     VALUES (?, ?, datetime('now', '+14 days'), datetime('now'))
   `).run(token, userId);
   return token;
+}
+
+function cleanupExpiredPasswordResetTokens() {
+  db.prepare("DELETE FROM password_reset_tokens WHERE datetime(expiresAt) <= datetime('now') OR usedAt IS NOT NULL").run();
+}
+
+function createPasswordResetToken(userId: number): { token: string; expiresAt: string } {
+  cleanupExpiredPasswordResetTokens();
+  db.prepare("DELETE FROM password_reset_tokens WHERE user_id = ?").run(userId);
+
+  const token = crypto.randomBytes(32).toString("hex");
+  const tokenHash = hashResetToken(token);
+  const expiresAtRow = db.prepare("SELECT datetime('now', '+30 minutes') AS expiresAt").get() as any;
+  const expiresAt = String(expiresAtRow?.expiresAt || "");
+
+  db.prepare(`
+    INSERT INTO password_reset_tokens (user_id, tokenHash, expiresAt, createdAt)
+    VALUES (?, ?, ?, datetime('now'))
+  `).run(userId, tokenHash, expiresAt);
+
+  return { token, expiresAt };
+}
+
+function buildPasswordResetUrl(req: any, token: string): string {
+  const configuredBase = String(process.env.APP_URL || process.env.FRONTEND_ORIGIN || "").split(",")[0];
+  const requestOrigin = normalizeOrigin(String(req?.headers?.origin || ""));
+  const base = normalizeOrigin(configuredBase) || requestOrigin;
+  if (!base) return token;
+  return `${base}/#reset-password?token=${encodeURIComponent(token)}`;
+}
+
+function consumePasswordResetToken(token: string): any | null {
+  cleanupExpiredPasswordResetTokens();
+  const tokenHash = hashResetToken(token);
+  const row = db.prepare(`
+    SELECT id, user_id
+    FROM password_reset_tokens
+    WHERE tokenHash = ?
+      AND usedAt IS NULL
+      AND datetime(expiresAt) > datetime('now')
+    LIMIT 1
+  `).get(tokenHash) as any;
+  return row?.id ? row : null;
 }
 
 function setSessionCookie(req: any, res: any, token: string) {
@@ -908,17 +975,22 @@ sanitizeSharedSettingsData();
 async function startServer() {
   const app = express();
   app.set("trust proxy", 1);
-  const allowedOrigins = resolveAllowedOrigins();
+  const corsConfig = resolveCorsConfig();
+  const allowCredentialedCors = !corsConfig.allowAnyOrigin;
 
   app.use((req, res, next) => {
     const originHeader = String(req.headers.origin || "");
     const normalizedOrigin = normalizeOrigin(originHeader);
-    const allowOrigin = normalizedOrigin && allowedOrigins.has(normalizedOrigin) ? originHeader : "";
+    const allowOrigin = normalizedOrigin && (corsConfig.allowAnyOrigin || corsConfig.allowedOrigins.has(normalizedOrigin))
+      ? originHeader
+      : "";
 
     if (allowOrigin) {
       res.header("Access-Control-Allow-Origin", allowOrigin);
       res.header("Vary", "Origin");
-      res.header("Access-Control-Allow-Credentials", "true");
+      if (allowCredentialedCors) {
+        res.header("Access-Control-Allow-Credentials", "true");
+      }
       res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
       res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
     }
@@ -1004,6 +1076,73 @@ async function startServer() {
       });
     } catch (err: any) {
       console.error("Error in POST /api/auth/login:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/auth/forgot-password", (req, res) => {
+    try {
+      const email = normalizeAuthIdentifier(req.body?.email || req.body?.username);
+      if (!isValidEmail(email)) {
+        return res.status(400).json({ error: "Email invalido. Informe um e-mail valido." });
+      }
+
+      const user = db.prepare("SELECT id FROM users WHERE username = ?").get(email) as any;
+      let debugResetToken = "";
+      let debugResetUrl = "";
+
+      if (user?.id) {
+        const reset = createPasswordResetToken(Number(user.id));
+        debugResetToken = reset.token;
+        debugResetUrl = buildPasswordResetUrl(req, reset.token);
+        console.log(`[AUTH] Password reset requested for ${email}: ${debugResetUrl}`);
+      }
+
+      const shouldExposeDebugToken = !isProduction || isTruthyEnvFlag(process.env.RESET_PASSWORD_DEBUG);
+      return res.json({
+        success: true,
+        message: "Se o e-mail existir, voce recebera as instrucoes para redefinir a senha.",
+        ...(shouldExposeDebugToken && debugResetToken ? {
+          debugResetToken,
+          debugResetUrl
+        } : {})
+      });
+    } catch (err: any) {
+      console.error("Error in POST /api/auth/forgot-password:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/auth/reset-password", (req, res) => {
+    try {
+      const token = String(req.body?.token || "").trim();
+      const password = String(req.body?.password || "");
+      if (!token || !password) {
+        return res.status(400).json({ error: "Token e nova senha sao obrigatorios." });
+      }
+      if (password.length < 6) {
+        return res.status(400).json({ error: "Senha invalida. Minimo de 6 caracteres." });
+      }
+
+      const resetRow = consumePasswordResetToken(token);
+      if (!resetRow?.id || !resetRow?.user_id) {
+        return res.status(400).json({ error: "Token de recuperacao invalido ou expirado." });
+      }
+
+      const tx = db.transaction(() => {
+        db.prepare("UPDATE users SET passwordHash = ?, updatedAt = datetime('now') WHERE id = ?").run(
+          hashPassword(password),
+          Number(resetRow.user_id)
+        );
+        db.prepare("UPDATE password_reset_tokens SET usedAt = datetime('now') WHERE id = ?").run(Number(resetRow.id));
+        db.prepare("DELETE FROM user_sessions WHERE user_id = ?").run(Number(resetRow.user_id));
+      });
+      tx();
+
+      clearSessionCookie(req, res);
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.error("Error in POST /api/auth/reset-password:", err);
       res.status(500).json({ error: err.message });
     }
   });
@@ -1670,6 +1809,12 @@ async function startServer() {
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
+      configFile: false,
+      plugins: [react(), tailwindcss()],
+      define: {
+        "process.env.GEMINI_API_KEY": JSON.stringify(process.env.GEMINI_API_KEY || ""),
+        "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV || "development"),
+      },
       server: { middlewareMode: true },
       appType: "spa",
     });

@@ -1,8 +1,8 @@
 import { format, isValid, parseISO } from 'date-fns';
 import type { Settings, TimeEntry, WeeklySummary } from './calculations';
 import {
-  getLastExitMinutes,
   normalizeOvernightEntries,
+  periodsFromEntry,
   resolveDailyJourneyMinutes,
   sumEntryWorkedMinutes,
   timeToMinutes
@@ -38,8 +38,8 @@ interface DayRuleContext {
   isOvertimeCardEntry: boolean;
   dailyJourneyMinutesEntry: number;
   dailyTotalMinutes: number;
+  rawOvertimeMinutes: number;
   dayOvertimeMinutes: number;
-  dayEndMinutes: number;
 }
 
 type DayRule = (ctx: DayRuleContext, next: () => void) => void;
@@ -72,10 +72,10 @@ function buildRates(settings: Settings): RatePack {
   return { hourlyRate, rate50, rate75, rate100, rate125 };
 }
 
-export function resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes: number, workedMinutes: number): number {
+export function resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes: number): number {
   if (rawOvertimeMinutes <= 0) return 0;
-  if (Math.max(0, workedMinutes) >= 6 * 60) return 60;
-  if (rawOvertimeMinutes >= 4 * 60) return 15;
+  if (rawOvertimeMinutes > 6 * 60) return 60;
+  if (rawOvertimeMinutes > 4 * 60) return 15;
   return 0;
 }
 
@@ -108,23 +108,22 @@ const resolveJourneyRule: DayRule = (ctx, next) => {
 
 const computeWorkedTimeRule: DayRule = (ctx, next) => {
   ctx.dailyTotalMinutes = sumEntryWorkedMinutes(ctx.entry);
-  ctx.dayEndMinutes = getLastExitMinutes(ctx.entry);
   next();
 };
 
-function applyOvertimeDiscounts(rawOvertimeMinutes: number, workedMinutes: number): number {
-  const discountMinutes = resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes, workedMinutes);
+function applyOvertimeDiscounts(rawOvertimeMinutes: number): number {
+  const discountMinutes = resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes);
   return Math.max(0, rawOvertimeMinutes - discountMinutes);
 }
 
 const computeDayOvertimeRule: DayRule = (ctx, next) => {
-  const rawOvertimeMinutes = ctx.isSunday
+  ctx.rawOvertimeMinutes = ctx.isSunday
     ? ctx.dailyTotalMinutes
     : Math.max(
         0,
         ctx.dailyTotalMinutes - (ctx.dailyJourneyMinutesEntry || (ctx.dailyTotalMinutes > 0 ? 0 : Infinity))
       );
-  ctx.dayOvertimeMinutes = applyOvertimeDiscounts(rawOvertimeMinutes, ctx.dailyTotalMinutes);
+  ctx.dayOvertimeMinutes = applyOvertimeDiscounts(ctx.rawOvertimeMinutes);
   next();
 };
 
@@ -142,36 +141,36 @@ const classifyAndAccumulateRule: DayRule = (ctx, next) => {
   }
 
   const totalOvertimeToProcess = Math.round(ctx.dayOvertimeMinutes);
-  let processed = 0;
-  while (processed < totalOvertimeToProcess) {
-    const currentMinuteFromEnd = ctx.dayEndMinutes - (processed + 0.5);
-    let minuteOfDay = currentMinuteFromEnd;
-    while (minuteOfDay < 0) minuteOfDay += 24 * 60;
-    while (minuteOfDay >= 24 * 60) minuteOfDay -= 24 * 60;
+  let remainingDiscountMinutes = Math.max(0, Math.round(ctx.rawOvertimeMinutes - ctx.dayOvertimeMinutes));
+  let processedOvertimeMinutes = 0;
+  const periods = periodsFromEntry(ctx.entry);
 
-    const isNight = minuteOfDay >= ctx.nightCutoffMinutes || minuteOfDay < 5 * 60;
+  for (const [start, end] of periods) {
+    if (processedOvertimeMinutes >= totalOvertimeToProcess) break;
+    if (!start || !start.includes(':') || !end || !end.includes(':')) continue;
 
-    if (ctx.isSunday) {
-      if (isNight) {
-        ctx.week.total125Minutes += 1;
-        ctx.grand.total125Minutes += 1;
-      } else {
-        ctx.week.total100Minutes += 1;
-        ctx.grand.total100Minutes += 1;
+    const startMinutes = timeToMinutes(start);
+    const endMinutes = timeToMinutes(end);
+    let duration = endMinutes - startMinutes;
+    if (duration < 0) duration += 24 * 60;
+    if (duration <= 0) continue;
+
+    for (let offset = 0; offset < duration; offset++) {
+      let minuteOfDay = startMinutes + offset;
+      while (minuteOfDay >= 24 * 60) minuteOfDay -= 24 * 60;
+
+      if (!ctx.isSunday && offset < ctx.dailyJourneyMinutesEntry) {
+        continue;
       }
-    } else {
-      const limitMinutes = (ctx.settings.weeklyLimit || 0) * 60;
-      const isWithinLimit = limitMinutes > 0 ? ctx.week.weekOvertimeAccumulator < limitMinutes : true;
+      if (remainingDiscountMinutes > 0) {
+        remainingDiscountMinutes -= 1;
+        continue;
+      }
+      if (processedOvertimeMinutes >= totalOvertimeToProcess) break;
 
-      if (isWithinLimit) {
-        if (isNight) {
-          ctx.week.total75Minutes += 1;
-          ctx.grand.total75Minutes += 1;
-        } else {
-          ctx.week.total50Minutes += 1;
-          ctx.grand.total50Minutes += 1;
-        }
-      } else {
+      const isNight = minuteOfDay >= ctx.nightCutoffMinutes || minuteOfDay < 5 * 60;
+
+      if (ctx.isSunday) {
         if (isNight) {
           ctx.week.total125Minutes += 1;
           ctx.grand.total125Minutes += 1;
@@ -179,11 +178,32 @@ const classifyAndAccumulateRule: DayRule = (ctx, next) => {
           ctx.week.total100Minutes += 1;
           ctx.grand.total100Minutes += 1;
         }
-      }
-      ctx.week.weekOvertimeAccumulator += 1;
-    }
+      } else {
+        const limitMinutes = (ctx.settings.weeklyLimit || 0) * 60;
+        const isWithinLimit = limitMinutes > 0 ? ctx.week.weekOvertimeAccumulator < limitMinutes : true;
 
-    processed += 1;
+        if (isWithinLimit) {
+          if (isNight) {
+            ctx.week.total75Minutes += 1;
+            ctx.grand.total75Minutes += 1;
+          } else {
+            ctx.week.total50Minutes += 1;
+            ctx.grand.total50Minutes += 1;
+          }
+        } else {
+          if (isNight) {
+            ctx.week.total125Minutes += 1;
+            ctx.grand.total125Minutes += 1;
+          } else {
+            ctx.week.total100Minutes += 1;
+            ctx.grand.total100Minutes += 1;
+          }
+        }
+        ctx.week.weekOvertimeAccumulator += 1;
+      }
+
+      processedOvertimeMinutes += 1;
+    }
   }
 
   next();
@@ -196,25 +216,24 @@ const runDayRuleChain = composeRules([
   classifyAndAccumulateRule
 ]);
 
-function groupByCustomWeek(entries: TimeEntry[]): Record<string, TimeEntry[]> {
+function getRealWeekKey(date: Date): string {
+  const base = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const day = base.getDay();
+  const diffToMonday = day === 0 ? -6 : 1 - day;
+  base.setDate(base.getDate() + diffToMonday);
+  const year = base.getFullYear();
+  const month = String(base.getMonth() + 1).padStart(2, '0');
+  const dayOfMonth = String(base.getDate()).padStart(2, '0');
+  return `${year}-${month}-${dayOfMonth}`;
+}
+
+function groupByRealWeek(entries: TimeEntry[]): Record<string, TimeEntry[]> {
   const weeks: Record<string, TimeEntry[]> = {};
   entries.forEach((entry) => {
     if (!entry.date) return;
     const date = parseISO(entry.date);
     if (!isValid(date)) return;
-
-    const dayOfMonth = date.getDate();
-    const monthYear = format(date, 'yyyy-MM');
-    const firstOfMonth = new Date(date.getFullYear(), date.getMonth(), 1);
-    const dayOfWeekFirstOfMonth = (firstOfMonth.getDay() + 6) % 7 + 1; // Monday=1 ... Sunday=7
-    const daysUntilFirstSunday = 7 - (dayOfWeekFirstOfMonth % 7);
-
-    let weekIndex = 1;
-    if (dayOfMonth > daysUntilFirstSunday) {
-      weekIndex = 1 + Math.ceil((dayOfMonth - daysUntilFirstSunday) / 7);
-    }
-
-    const key = `${monthYear}-W${weekIndex}`;
+    const key = getRealWeekKey(date);
     if (!weeks[key]) weeks[key] = [];
     weeks[key].push(entry);
   });
@@ -225,7 +244,7 @@ export function runOvertimeEngine(entries: TimeEntry[], settings: Settings): Ove
   const effectiveEntries = normalizeOvernightEntries(entries);
   const rates = buildRates(settings);
   const nightCutoffMinutes = timeToMinutes(settings.nightCutoff || '22:00');
-  const groupedWeeks = groupByCustomWeek(effectiveEntries);
+  const groupedWeeks = groupByRealWeek(effectiveEntries);
 
   const grand: MutableTotals = {
     total50Minutes: 0,
@@ -268,8 +287,8 @@ export function runOvertimeEngine(entries: TimeEntry[], settings: Settings): Ove
         isOvertimeCardEntry: !!entry.isOvertimeCard,
         dailyJourneyMinutesEntry: 0,
         dailyTotalMinutes: 0,
+        rawOvertimeMinutes: 0,
         dayOvertimeMinutes: 0,
-        dayEndMinutes: 0
       };
 
       runDayRuleChain(ctx);

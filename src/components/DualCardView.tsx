@@ -137,7 +137,7 @@ function resolveEntryDiscountMinutes(entry: TimeEntry, isOvertimeCardEntry: bool
     settings.compDays
   );
   const rawOvertimeMinutes = dayOfWeek === 0 ? workedMinutes : Math.max(0, workedMinutes - journeyMinutes);
-  return resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes, workedMinutes);
+  return resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes);
 }
 
 export default function DualCardView({ entries, onSave, onBack, month, onUploadClick, settings, disableSave }: Props) {
