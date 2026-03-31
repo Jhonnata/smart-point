@@ -197,6 +197,18 @@ export default function UploadView({
   };
 
   React.useEffect(() => {
+    setSelectedExistingMonth(initialMonth);
+    setManualReferenceMonth(initialMonth || '');
+    if (initialMonth) {
+      const nextYear = Number(initialMonth.slice(0, 4));
+      if (Number.isFinite(nextYear)) setManualYear(nextYear);
+    }
+    setIsOvertimeCard(initialIsOvertimeCard);
+    setFrontImage(null);
+    setBackImage(null);
+  }, [initialIsOvertimeCard, initialMonth]);
+
+  React.useEffect(() => {
     if (!selectedExistingMonth) {
       setFrontImage(null);
       setBackImage(null);

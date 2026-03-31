@@ -11,7 +11,8 @@ import {
   ChevronRight,
   Menu,
   X,
-  DollarSign
+  DollarSign,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast, Toaster } from 'sonner';
@@ -26,7 +27,7 @@ import type { Settings } from './lib/calculations';
 import type { TimeEntry } from './services/aiService';
 import { cn } from './lib/utils';
 import { apiFetch, clearStoredAuthToken, isApiUnavailableInCurrentHost, setStoredAuthToken } from './lib/api';
-import { getSupabasePasswordResetRedirectUrl, isSupabaseConfigured, isSupabasePasswordRecoveryMode, supabase } from './lib/supabase';
+import { getSupabaseAuthRedirectBaseUrl, getSupabasePasswordResetRedirectUrl, isSupabaseConfigured, isSupabasePasswordRecoveryMode, supabase } from './lib/supabase';
 import { clearReferences, deleteReference, getReference, getSettings, listHoleriths, saveReference, saveSettings as saveSupabaseSettings } from './lib/supabaseData';
 import { parseISO, isValid, format as formatDate } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -613,6 +614,7 @@ export default function App() {
           email,
           password,
           options: {
+            emailRedirectTo: getSupabaseAuthRedirectBaseUrl(),
             data: {
               display_name: displayName
             }
@@ -820,9 +822,11 @@ export default function App() {
     setIsLoading(true);
     try {
       if (useSupabaseData) {
-        const settingsData = await getSettings();
+        const [settingsData] = await Promise.all([
+          getSettings(),
+          refreshHolerithsAndCache(),
+        ]);
         setSettings(settingsData);
-        await refreshHolerithsAndCache();
         return;
       }
       const sRes = await apiFetch('/api/settings');
@@ -849,7 +853,7 @@ export default function App() {
       if (useSupabaseData) {
         await saveSupabaseSettings(newSettings);
         setSettings(newSettings);
-        toast.success("ConfiguraÃ§Ãµes salvas!");
+        toast.success("Configurações salvas!");
         setView('dashboard');
         return;
       }
@@ -982,10 +986,15 @@ export default function App() {
 
     const normalSample = normalRows[0] as any;
     const overtimeSample = overtimeRows[0] as any;
-    const frontImage = persistNormal ? normalSample?.frontImage : undefined;
-    const backImage = persistNormal ? normalSample?.backImage : undefined;
-    const frontImageHe = persistOvertime ? overtimeSample?.frontImage : undefined;
-    const backImageHe = persistOvertime ? overtimeSample?.backImage : undefined;
+    const sanitizeImageForSave = (value: string | undefined) => {
+      const txt = String(value || '').trim();
+      if (!txt) return undefined;
+      return txt.startsWith('data:') ? txt : undefined;
+    };
+    const frontImage = persistNormal ? sanitizeImageForSave(normalSample?.frontImage) : undefined;
+    const backImage = persistNormal ? sanitizeImageForSave(normalSample?.backImage) : undefined;
+    const frontImageHe = persistOvertime ? sanitizeImageForSave(overtimeSample?.frontImage) : undefined;
+    const backImageHe = persistOvertime ? sanitizeImageForSave(overtimeSample?.backImage) : undefined;
 
     try {
       const currentUpdateMode: CardSaveMode = pendingCardSaveMode || 'merge';
@@ -1474,6 +1483,13 @@ export default function App() {
           )}
         </div>
 
+        {(isLoading || isMonthLoading) && (
+          <div className="mb-6 flex items-center gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm font-semibold text-zinc-700 shadow-sm">
+            <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />
+            {isLoading ? 'Carregando dados do Supabase...' : 'Buscando competência selecionada...'}
+          </div>
+        )}
+
         {/* Card Header Info */}
         {filteredEntries.length > 0 && (view === 'resumo' || view === 'card' || view === 'holerith') && (
           <div className="mb-8 sm:mb-12 bg-white p-4 sm:p-6 md:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm flex flex-wrap gap-5 sm:gap-8">
@@ -1886,10 +1902,16 @@ export default function App() {
                   frontImageHe: isOvertime ? (metadata.frontImage || undefined) : undefined,
                   backImageHe: isOvertime ? (metadata.backImage || undefined) : undefined,
                 });
-                toast.success("Cartão processado com sucesso!");
-                setUploadContext(null);
                 setSelectedMonth(referenceKey);
-                setView('dashboard');
+                if (!isOvertime) {
+                  setUploadContext({ month: referenceKey, isOvertime: true });
+                  setView('upload');
+                  toast.success("Cartão normal salvo. Agora envie o cartão de horas extras, se houver.");
+                } else {
+                  toast.success("Cartão processado com sucesso!");
+                  setUploadContext(null);
+                  setView('dashboard');
+                }
               } catch (err) {
                 console.error("Error processing entries in App", err);
                 toast.error("Erro ao processar os dados do cartão.");

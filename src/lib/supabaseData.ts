@@ -60,6 +60,10 @@ function ensureSupabase() {
 
 async function getCurrentUserId(): Promise<string> {
   const client = ensureSupabase();
+  const { data: sessionData, error: sessionError } = await client.auth.getSession();
+  if (sessionError) throw sessionError;
+  const sessionUserId = String(sessionData.session?.user?.id || '').trim();
+  if (sessionUserId) return sessionUserId;
   const { data, error } = await client.auth.getUser();
   if (error) throw error;
   const userId = String(data.user?.id || '').trim();
@@ -198,7 +202,7 @@ function buildImagePath(userId: string, ref: string, key: 'front' | 'back' | 'fr
 async function uploadCardImage(userId: string, ref: string, key: 'front' | 'back' | 'front-he' | 'back-he', imageDataUrl?: string | null): Promise<string | null> {
   if (!imageDataUrl) return null;
   if (!String(imageDataUrl).startsWith('data:')) {
-    return String(imageDataUrl);
+    return null;
   }
   const client = ensureSupabase();
   const path = buildImagePath(userId, ref, key, imageDataUrl);
@@ -306,6 +310,38 @@ function settingsFromRow(row: any): Settings {
     saturdayWorkStart: row?.saturday_work_start ?? DEFAULT_SETTINGS.saturdayWorkStart,
     saturdayWorkEnd: row?.saturday_work_end ?? DEFAULT_SETTINGS.saturdayWorkEnd,
   };
+}
+
+function buildFullReferenceRows(
+  entries: any[],
+  type: CardType,
+  month: number,
+  year: number,
+  cycleStartDay: number
+): any[] {
+  const byDate: Record<string, any> = {};
+  (entries || []).filter((entry: any) => entry.card_type === type).forEach((entry: any) => {
+    byDate[entry.work_date] = entry;
+  });
+
+  const output: any[] = [];
+  for (let day = 1; day <= 31; day++) {
+    const date = buildWorkDate(day, month, year, cycleStartDay);
+    const src = byDate[date];
+    output.push({
+      date,
+      day: String(day).padStart(2, '0'),
+      entry1: src?.entry1 || '',
+      exit1: src?.exit1 || '',
+      entry2: src?.entry2 || '',
+      exit2: src?.exit2 || '',
+      entryExtra: src?.entry_extra || '',
+      exitExtra: src?.exit_extra || '',
+      totalHours: src?.total_hours || '',
+      isDPAnnotation: !!src?.is_dp_annotation,
+    });
+  }
+  return output;
 }
 
 async function ensureSettingsRow(userId: string): Promise<Settings> {
@@ -450,15 +486,16 @@ export async function getReference(ref: string): Promise<any> {
   const userId = await getCurrentUserId();
   const month = Number(ref.slice(0, 2));
   const year = Number(ref.slice(2));
-  const settings = await ensureSettingsRow(userId);
-
-  const { data: reference, error } = await client
-    .from('references')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('month', month)
-    .eq('year', year)
-    .maybeSingle();
+  const [{ data: reference, error }, settings] = await Promise.all([
+    client
+      .from('references')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('month', month)
+      .eq('year', year)
+      .maybeSingle(),
+    ensureSettingsRow(userId),
+  ]);
   if (error) throw error;
 
   if (!reference) {
@@ -485,31 +522,6 @@ export async function getReference(ref: string): Promise<any> {
   if (entriesError) throw entriesError;
 
   const cycleStartDay = clampCycleStartDay(settings.cycleStartDay);
-  const buildFull = (type: CardType) => {
-    const byDate: Record<string, any> = {};
-    (entries || []).filter((entry: any) => entry.card_type === type).forEach((entry: any) => {
-      byDate[entry.work_date] = entry;
-    });
-
-    const output: any[] = [];
-    for (let day = 1; day <= 31; day++) {
-      const date = buildWorkDate(day, month, year, cycleStartDay);
-      const src = byDate[date];
-      output.push({
-        date,
-        day: String(day).padStart(2, '0'),
-        entry1: src?.entry1 || '',
-        exit1: src?.exit1 || '',
-        entry2: src?.entry2 || '',
-        exit2: src?.exit2 || '',
-        entryExtra: src?.entry_extra || '',
-        exitExtra: src?.exit_extra || '',
-        totalHours: src?.total_hours || '',
-        isDPAnnotation: !!src?.is_dp_annotation,
-      });
-    }
-    return output;
-  };
 
   const hasNormalRows = (entries || []).some((entry: any) => entry.card_type === 'normal' && hasAnyContent({
     entry1: entry.entry1,
@@ -558,39 +570,62 @@ export async function getReference(ref: string): Promise<any> {
     backImage: backImageUrl,
     frontImageHe: frontImageHeUrl,
     backImageHe: backImageHeUrl,
-    hours: hasNormalCard ? buildFull('normal') : [],
-    he: hasOvertimeCard ? buildFull('overtime') : [],
+    hours: hasNormalCard ? buildFullReferenceRows(entries || [], 'normal', month, year, cycleStartDay) : [],
+    he: hasOvertimeCard ? buildFullReferenceRows(entries || [], 'overtime', month, year, cycleStartDay) : [],
   };
 }
 
 export async function saveReference(ref: string, payload: ReferencePayload): Promise<void> {
   const client = ensureSupabase();
   const userId = await getCurrentUserId();
-  const settings = await ensureSettingsRow(userId);
   const month = Number(ref.slice(0, 2));
   const year = Number(ref.slice(2));
-  const { data: existingReferenceRow, error: existingReferenceError } = await client
-    .from('references')
-    .select('*')
-    .eq('user_id', userId)
-    .eq('month', month)
-    .eq('year', year)
-    .maybeSingle();
+  const [{ data: existingReferenceRow, error: existingReferenceError }, settings] = await Promise.all([
+    client
+      .from('references')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('month', month)
+      .eq('year', year)
+      .maybeSingle(),
+    ensureSettingsRow(userId),
+  ]);
   if (existingReferenceError) throw existingReferenceError;
-  const existingReference = await getReference(ref);
+  const cycleStartDay = clampCycleStartDay(settings.cycleStartDay);
+  const existingEntries = existingReferenceRow
+    ? await (async () => {
+        const { data, error } = await client
+          .from('reference_entries')
+          .select('*')
+          .eq('reference_id', existingReferenceRow.id)
+          .order('work_date', { ascending: true })
+          .order('day', { ascending: true });
+        if (error) throw error;
+        return data || [];
+      })()
+    : [];
+  const existingReference = {
+    hours: buildFullReferenceRows(existingEntries, 'normal', month, year, cycleStartDay),
+    he: buildFullReferenceRows(existingEntries, 'overtime', month, year, cycleStartDay),
+  };
 
-  const frontImagePath = payload.frontImage !== undefined
-    ? await uploadCardImage(userId, ref, 'front', payload.frontImage)
-    : (existingReferenceRow?.front_image || null);
-  const backImagePath = payload.backImage !== undefined
-    ? await uploadCardImage(userId, ref, 'back', payload.backImage)
-    : (existingReferenceRow?.back_image || null);
-  const frontImageHePath = payload.frontImageHe !== undefined
-    ? await uploadCardImage(userId, ref, 'front-he', payload.frontImageHe)
-    : (existingReferenceRow?.front_image_he || null);
-  const backImageHePath = payload.backImageHe !== undefined
-    ? await uploadCardImage(userId, ref, 'back-he', payload.backImageHe)
-    : (existingReferenceRow?.back_image_he || null);
+  const resolveImagePath = async (
+    key: 'front' | 'back' | 'front-he' | 'back-he',
+    nextImage: string | null | undefined,
+    existingPath: string | null | undefined
+  ): Promise<string | null> => {
+    if (nextImage === undefined) return existingPath || null;
+    if (!nextImage) return null;
+    if (String(nextImage).startsWith('data:')) {
+      return await uploadCardImage(userId, ref, key, nextImage);
+    }
+    return existingPath || null;
+  };
+
+  const frontImagePath = await resolveImagePath('front', payload.frontImage, existingReferenceRow?.front_image);
+  const backImagePath = await resolveImagePath('back', payload.backImage, existingReferenceRow?.back_image);
+  const frontImageHePath = await resolveImagePath('front-he', payload.frontImageHe, existingReferenceRow?.front_image_he);
+  const backImageHePath = await resolveImagePath('back-he', payload.backImageHe, existingReferenceRow?.back_image_he);
 
   const referenceRow = {
     user_id: userId,
@@ -619,8 +654,6 @@ export async function saveReference(ref: string, payload: ReferencePayload): Pro
   if (refError) throw refError;
 
   const referenceId = String(refData.id);
-  const cycleStartDay = clampCycleStartDay(settings.cycleStartDay);
-
   const persistType = async (type: CardType, rows: any[]) => {
     const normalizedRows = normalizeOvernightRows(rows || []);
     const existingRows = type === 'normal' ? (existingReference.hours || []) : (existingReference.he || []);

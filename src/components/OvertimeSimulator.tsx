@@ -1,6 +1,6 @@
 ﻿import React from 'react';
 import { parseISO, isValid } from 'date-fns';
-import { Calculator, Save, WandSparkles } from 'lucide-react';
+import { Calculator, Loader2, Save, WandSparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Settings, TimeEntry } from '../lib/calculations';
 import { resolveWorkDateByCompetenciaDay, timeToMinutes } from '../lib/calculations';
@@ -637,7 +637,13 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
           </button>
         </div>
 
-        <div className="text-[11px] text-zinc-500 font-medium">Referencia: {referenceMonth} {isPlanLoading ? '(carregando planejamento...)' : ''}</div>
+        <div className="text-[11px] text-zinc-500 font-medium">Referencia: {referenceMonth}</div>
+        {isPlanLoading && (
+          <div className="flex items-center gap-2 rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs font-semibold text-zinc-700">
+            <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />
+            Carregando planejamento salvo do Supabase...
+          </div>
+        )}
         {settings.saturdayCompensation && <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">Regra ativa: com compensacao semanal, os dias {compDaysLabel} recebem +1h na jornada; no sabado o sugestor prioriza ate {Math.round(saturdayLimitMinutes / 60)}h.</div>}
         <div className="text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2">
           Dias configurados para compensacao: <span className="font-bold uppercase">{compDaysLabel}</span>. A sugestao prioriza: {preferSaturdayMax ? 'sabado (no limite), depois dias de compensacao, depois demais dias' : 'dias de compensacao, depois demais dias'}.
