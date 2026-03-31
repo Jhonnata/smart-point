@@ -163,6 +163,64 @@ function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function inferMimeTypeFromUrl(url: string): string {
+  const normalized = url.toLowerCase();
+  if (normalized.includes('.png')) return 'image/png';
+  if (normalized.includes('.webp')) return 'image/webp';
+  if (normalized.includes('.gif')) return 'image/gif';
+  return 'image/jpeg';
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode(...chunk);
+  }
+  return btoa(binary);
+}
+
+async function normalizeImageForGemini(image: string): Promise<{ mimeType: string; data: string }> {
+  const raw = String(image || '').trim();
+  if (!raw) throw new Error('Imagem vazia para OCR.');
+
+  if (raw.startsWith('data:')) {
+    const match = raw.match(/^data:(.*?);base64,(.*)$/);
+    if (!match) throw new Error('Imagem data URL invalida para OCR.');
+    return {
+      mimeType: match[1] || 'image/jpeg',
+      data: match[2] || '',
+    };
+  }
+
+  if (/^https?:\/\//i.test(raw)) {
+    const response = await fetch(raw);
+    if (!response.ok) {
+      throw new Error(`Falha ao baixar imagem do Storage (${response.status}).`);
+    }
+    const buffer = await response.arrayBuffer();
+    const mimeType = response.headers.get('content-type') || inferMimeTypeFromUrl(raw);
+    return {
+      mimeType,
+      data: bytesToBase64(new Uint8Array(buffer)),
+    };
+  }
+
+  return {
+    mimeType: 'image/jpeg',
+    data: raw,
+  };
+}
+
+function normalizeImageForOpenAI(image: string): string {
+  const raw = String(image || '').trim();
+  if (!raw) throw new Error('Imagem vazia para OCR.');
+  if (raw.startsWith('data:')) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `data:image/jpeg;base64,${raw}`;
+}
+
 async function parseWithGemini(
   images: string[],
   settings: Settings
@@ -173,10 +231,11 @@ async function parseWithGemini(
     throw new Error("Chave de API Gemini nao configurada.");
   }
   const ai = new GoogleGenAI({ apiKey });
-  const imageParts = images.map(img => ({
+  const normalizedImages = await Promise.all(images.map((img) => normalizeImageForGemini(img)));
+  const imageParts = normalizedImages.map((img) => ({
     inlineData: {
-      mimeType: "image/jpeg",
-      data: img.split(",")[1] || img,
+      mimeType: img.mimeType,
+      data: img.data,
     },
   }));
   const maxAttempts = 4;
@@ -259,7 +318,7 @@ async function parseWithOpenAI(
   const imageContent = images.map(img => ({
     type: "image_url",
     image_url: {
-      url: img.startsWith("data:") ? img : `data:image/jpeg;base64,${img}`
+      url: normalizeImageForOpenAI(img)
     }
   }));
 

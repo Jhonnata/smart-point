@@ -21,6 +21,10 @@ type ReferencePayload = {
   backImageHe?: string;
 };
 
+type SaveReferenceResult = {
+  skippedInvalidDates: number;
+};
+
 const DEFAULT_SETTINGS: Settings = {
   baseSalary: 2500,
   monthlyHours: 220,
@@ -166,6 +170,22 @@ function buildWorkDate(day: number, referenceMonth: number, referenceYear: numbe
     }
   }
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function isValidIsoCalendarDate(value: string): boolean {
+  const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return false;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
 }
 
 function hasAnyContent(row: any): boolean {
@@ -575,7 +595,7 @@ export async function getReference(ref: string): Promise<any> {
   };
 }
 
-export async function saveReference(ref: string, payload: ReferencePayload): Promise<void> {
+export async function saveReference(ref: string, payload: ReferencePayload): Promise<SaveReferenceResult> {
   const client = ensureSupabase();
   const userId = await getCurrentUserId();
   const month = Number(ref.slice(0, 2));
@@ -654,6 +674,7 @@ export async function saveReference(ref: string, payload: ReferencePayload): Pro
   if (refError) throw refError;
 
   const referenceId = String(refData.id);
+  let skippedInvalidDates = 0;
   const persistType = async (type: CardType, rows: any[]) => {
     const normalizedRows = normalizeOvernightRows(rows || []);
     const existingRows = type === 'normal' ? (existingReference.hours || []) : (existingReference.he || []);
@@ -695,23 +716,31 @@ export async function saveReference(ref: string, payload: ReferencePayload): Pro
 
     await client.from('reference_entries').delete().eq('reference_id', referenceId).eq('card_type', type);
 
-    const insertPayload = Array.from(mergedByDate.values()).map((row: any) => ({
-      reference_id: referenceId,
-      card_type: type,
-      work_date: row.date,
-      day: row.day,
-      entry1: row.entry1 || null,
-      exit1: row.exit1 || null,
-      entry2: row.entry2 || null,
-      exit2: row.exit2 || null,
-      entry_extra: row.entryExtra || null,
-      exit_extra: row.exitExtra || null,
-      total_hours: row.totalHours || null,
-      is_dp_annotation: !!row.isDPAnnotation,
-    }));
+    const insertPayload = Array.from(mergedByDate.values()).flatMap((row: any) => {
+      if (!isValidIsoCalendarDate(row.date)) {
+        skippedInvalidDates += 1;
+        return [];
+      }
+      return [{
+        reference_id: referenceId,
+        card_type: type,
+        work_date: row.date,
+        day: row.day,
+        entry1: row.entry1 || null,
+        exit1: row.exit1 || null,
+        entry2: row.entry2 || null,
+        exit2: row.exit2 || null,
+        entry_extra: row.entryExtra || null,
+        exit_extra: row.exitExtra || null,
+        total_hours: row.totalHours || null,
+        is_dp_annotation: !!row.isDPAnnotation,
+      }];
+    });
 
-    const { error: insertError } = await client.from('reference_entries').insert(insertPayload);
-    if (insertError) throw insertError;
+    if (insertPayload.length > 0) {
+      const { error: insertError } = await client.from('reference_entries').insert(insertPayload);
+      if (insertError) throw insertError;
+    }
   };
 
   if (Array.isArray(payload.hours) && payload.hours.length > 0) {
@@ -733,6 +762,7 @@ export async function saveReference(ref: string, payload: ReferencePayload): Pro
     cardNumber: payload.cardNumber || settings.cardNumber,
   };
   await saveSettings(nextSettings);
+  return { skippedInvalidDates };
 }
 
 export async function deleteReference(ref: string, type: 'normal' | 'overtime' | 'all' = 'all'): Promise<{ success: true; count: number }> {

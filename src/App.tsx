@@ -891,8 +891,10 @@ export default function App() {
     const ref = `${payload.month}${payload.year}`;
     console.log(`Saving card via POST /api/referencia/${ref}`);
     try {
+      let skippedInvalidDates = 0;
       if (useSupabaseData) {
-        await saveReference(ref, payload);
+        const result = await saveReference(ref, payload);
+        skippedInvalidDates = Number(result?.skippedInvalidDates || 0);
       } else {
         const res = await apiFetch(`/api/referencia/${ref}`, {
           method: 'POST',
@@ -927,6 +929,9 @@ export default function App() {
       }
 
       toast.success("Dados salvos com sucesso!");
+      if (skippedInvalidDates > 0) {
+        toast.warning(`${skippedInvalidDates} data(s) inválida(s) foram ignoradas no salvamento.`);
+      }
       setView(nextView);
     } catch (err: any) {
       console.error("Error saving card:", err);
