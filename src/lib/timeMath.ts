@@ -12,6 +12,13 @@ export interface DatedPunchEntryLike extends PunchEntryLike {
   workDate?: string;
 }
 
+export interface DelayComputationOptions {
+  workStart?: string;
+  saturdayWorkStart?: string;
+  saturdayCompensation?: boolean;
+  toleranceMinutes?: number;
+}
+
 const CLOCK_RX = /^\d{1,2}:\d{2}$/;
 
 export function normalizeClock(value: unknown): string {
@@ -113,6 +120,36 @@ export function resolveDailyJourneyMinutes(
   if (compDays.includes(dayOfWeek)) return journey + 60;
   if (dayOfWeek === 6) return 0;
   return journey;
+}
+
+export function resolveExpectedStartMinutes(
+  dayOfWeek: number,
+  options?: DelayComputationOptions
+): number {
+  const saturdayCompensation = !!options?.saturdayCompensation;
+  const start = dayOfWeek === 6 && !saturdayCompensation
+    ? normalizeClock(options?.saturdayWorkStart) || normalizeClock(options?.workStart)
+    : normalizeClock(options?.workStart);
+  return start ? timeToMinutes(start) : 0;
+}
+
+export function resolveDelayMinutes(
+  entry: PunchEntryLike,
+  dayOfWeek: number,
+  options?: DelayComputationOptions
+): number {
+  const toleranceMinutes = Math.max(0, Number(options?.toleranceMinutes ?? 5));
+  const expectedStartMinutes = resolveExpectedStartMinutes(dayOfWeek, options);
+  if (expectedStartMinutes <= 0) return 0;
+
+  const firstStart = periodsFromEntry(entry)
+    .map(([start]) => normalizeClock(start))
+    .find(Boolean);
+  if (!firstStart) return 0;
+
+  const firstStartMinutes = timeToMinutes(firstStart);
+  if (firstStartMinutes <= expectedStartMinutes + toleranceMinutes) return 0;
+  return Math.max(0, firstStartMinutes - expectedStartMinutes);
 }
 
 export function normalizeOvernightEntries<T extends DatedPunchEntryLike>(entries: T[]): T[] {

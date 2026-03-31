@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   calculateOvertime,
+  resolveDelayMinutes,
   resolveDailyJourneyMinutes,
   resolveDailyOvertimeDiscountMinutes,
   type Settings,
@@ -73,6 +74,37 @@ test('compensacao de sabado adiciona +1h apenas nos dias configurados e zera o s
   assert.equal(resolveDailyJourneyMinutes(8, false, 4, true, settings.compDays), 9 * 60);
   assert.equal(resolveDailyJourneyMinutes(8, false, 5, true, settings.compDays), 8 * 60);
   assert.equal(resolveDailyJourneyMinutes(8, false, 6, true, settings.compDays), 0);
+});
+
+test('atraso aplica tolerancia de 5 minutos e conta o excedente real da entrada', () => {
+  const settings = createSettings({
+    workStart: '12:00',
+    saturdayCompensation: false,
+  });
+
+  assert.equal(resolveDelayMinutes(createEntry({
+    id: 'ok',
+    date: '2026-03-02',
+    start: '12:05',
+    end: '21:00',
+  }), 1, {
+    workStart: settings.workStart,
+    saturdayWorkStart: settings.saturdayWorkStart,
+    saturdayCompensation: settings.saturdayCompensation,
+    toleranceMinutes: 5,
+  }), 0);
+
+  assert.equal(resolveDelayMinutes(createEntry({
+    id: 'late',
+    date: '2026-03-02',
+    start: '12:09',
+    end: '21:00',
+  }), 1, {
+    workStart: settings.workStart,
+    saturdayWorkStart: settings.saturdayWorkStart,
+    saturdayCompensation: settings.saturdayCompensation,
+    toleranceMinutes: 5,
+  }), 9);
 });
 
 test('as 3 primeiras horas extras semanais sao classificadas em ordem cronologica', () => {

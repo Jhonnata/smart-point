@@ -153,6 +153,27 @@ function calcEntryTotalMinutes(entry: any): number {
   return total;
 }
 
+function resolveExpectedStartForSettings(settings: Settings, dayOfWeek: number): number {
+  const saturdayCompensation = !!settings.saturdayCompensation;
+  const raw = dayOfWeek === 6 && !saturdayCompensation
+    ? (settings.saturdayWorkStart || settings.workStart || '')
+    : (settings.workStart || '');
+  return normalizeClockValue(raw) ? timeToMinutes(raw) : 0;
+}
+
+function calcDelayMinutes(entry: any, settings: Settings, dayOfWeek: number): number {
+  const expectedStart = resolveExpectedStartForSettings(settings, dayOfWeek);
+  if (expectedStart <= 0) return 0;
+  const firstStart = [entry?.entry1, entry?.entry2, entry?.entryExtra]
+    .map((value) => normalizeClockValue(value))
+    .find(Boolean);
+  if (!firstStart) return 0;
+  const toleranceMinutes = 5;
+  const actualStart = timeToMinutes(firstStart);
+  if (actualStart <= expectedStart + toleranceMinutes) return 0;
+  return Math.max(0, actualStart - expectedStart);
+}
+
 function minutesToHHMM(minutes: number): string {
   const hh = Math.floor(minutes / 60);
   const mm = Math.round(minutes % 60);
@@ -409,6 +430,14 @@ async function recomputeBancoHorasForReference(referenceId: string, settings: Se
       if (compDays.includes(dayOfWeek)) currentJourney += 60;
       else if (dayOfWeek === 6) currentJourney = 0;
     }
+    const hasAnyMark = [
+      row.entry1,
+      row.exit1,
+      row.entry2,
+      row.exit2,
+      row.entry_extra,
+      row.exit_extra,
+    ].some((value) => !!String(value || '').trim());
     const total = calcEntryTotalMinutes({
       entry1: row.entry1,
       exit1: row.exit1,
@@ -436,22 +465,30 @@ async function recomputeBancoHorasForReference(referenceId: string, settings: Se
         description: 'Excedente cartao normal',
       }];
     }
-    if (total > 0 && total < currentJourney) {
-      return [{
-        reference_id: referenceId,
-        date: dateStr,
-        minutes: currentJourney - total,
-        type: 'atraso',
-        description: 'Atraso cartao normal',
-      }];
-    }
-    if (total === 0 && currentJourney > 0) {
+    if (!hasAnyMark && currentJourney > 0) {
       return [{
         reference_id: referenceId,
         date: dateStr,
         minutes: currentJourney,
         type: 'atraso',
         description: 'Falta cartao normal',
+      }];
+    }
+    const delayMinutes = calcDelayMinutes({
+      entry1: row.entry1,
+      exit1: row.exit1,
+      entry2: row.entry2,
+      exit2: row.exit2,
+      entryExtra: row.entry_extra,
+      exitExtra: row.exit_extra,
+    }, settings, dayOfWeek);
+    if (delayMinutes > 0) {
+      return [{
+        reference_id: referenceId,
+        date: dateStr,
+        minutes: delayMinutes,
+        type: 'atraso',
+        description: 'Atraso cartao normal',
       }];
     }
     return [];

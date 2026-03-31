@@ -5,8 +5,8 @@ import { ptBR } from 'date-fns/locale';
 import {
   calculateOvertime,
   normalizeOvernightEntries,
+  resolveDelayMinutes,
   resolveDailyJourneyMinutes,
-  sumEntryWorkedMinutes,
   type Settings,
   type TimeEntry
 } from '../lib/calculations';
@@ -57,7 +57,6 @@ export default function HolerithView({
       if (!isValid(date)) return;
       if (date.getDay() === 0) return;
 
-      const dailyMinutes = sumEntryWorkedMinutes(entry);
       const journey = resolveDailyJourneyMinutes(
         settings.dailyJourney || 0,
         !!entry.isOvertimeCard,
@@ -67,8 +66,18 @@ export default function HolerithView({
       );
 
       if (entry.isDPAnnotation) return;
-      if (dailyMinutes < journey && dailyMinutes > 0) totalAtrasoMinutes += (journey - dailyMinutes);
-      else if (dailyMinutes === 0) totalAtrasoMinutes += journey;
+      const hasAnyMark = [entry.entry1, entry.exit1, entry.entry2, entry.exit2, entry.entryExtra, entry.exitExtra]
+        .some((value) => !!String(value || '').trim());
+      if (!hasAnyMark) {
+        totalAtrasoMinutes += journey;
+      } else {
+        totalAtrasoMinutes += resolveDelayMinutes(entry, date.getDay(), {
+          workStart: settings.workStart,
+          saturdayWorkStart: settings.saturdayWorkStart,
+          saturdayCompensation: !!settings.saturdayCompensation,
+          toleranceMinutes: 5,
+        });
+      }
     });
 
     const valorHora = (settings.baseSalary || 0) / (settings.monthlyHours || 1);

@@ -796,6 +796,27 @@ function calcEntryTotalMinutes(entry: any): number {
   return total;
 }
 
+function resolveExpectedStartMinutesFromSettings(dayOfWeek: number, workStart?: string, saturdayWorkStart?: string, saturdayCompensation?: boolean): number {
+  const raw = dayOfWeek === 6 && !saturdayCompensation
+    ? (saturdayWorkStart || workStart || "")
+    : (workStart || "");
+  if (!raw || !raw.includes(":")) return 0;
+  return timeToMinutes(raw);
+}
+
+function calcDelayMinutes(entry: any, dayOfWeek: number, workStart?: string, saturdayWorkStart?: string, saturdayCompensation?: boolean): number {
+  const expectedStart = resolveExpectedStartMinutesFromSettings(dayOfWeek, workStart, saturdayWorkStart, saturdayCompensation);
+  if (expectedStart <= 0) return 0;
+  const starts = [entry?.entry1, entry?.entry2, entry?.entryExtra]
+    .map((value: any) => String(value || "").trim())
+    .filter((value: string) => /^\d{1,2}:\d{2}$/.test(value));
+  if (starts.length === 0) return 0;
+  const actualStart = timeToMinutes(starts[0]);
+  const toleranceMinutes = 5;
+  if (actualStart <= expectedStart + toleranceMinutes) return 0;
+  return Math.max(0, actualStart - expectedStart);
+}
+
 function minutesToHHMM(minutes: number): string {
   const hh = Math.floor(minutes / 60);
   const mm = Math.round(minutes % 60);
@@ -806,7 +827,9 @@ function recomputeBancoHorasForHolerith(
   holerithId: number,
   journeyMinutes: number,
   hasSatComp: boolean,
-  compDays: number[]
+  compDays: number[],
+  workStart?: string,
+  saturdayWorkStart?: string
 ) {
   db.prepare("DELETE FROM banco_horas WHERE holerith_id = ? AND type IN ('extra', 'atraso')").run(holerithId);
 
@@ -837,15 +860,20 @@ function recomputeBancoHorasForHolerith(
       else if (dayOfWeek === 6) curJourney = 0;
     }
     const total = calcEntryTotalMinutes(row);
+    const hasAnyMark = [row.entry1, row.exit1, row.entry2, row.exit2, row.entryExtra, row.exitExtra]
+      .some((value: any) => !!String(value || "").trim());
     if (isSunday) {
       if (total > 0) insBH.run(holerithId, dateStr, total, "extra", "Domingo - banco de horas");
     } else {
       if (total > curJourney) {
         insBH.run(holerithId, dateStr, total - curJourney, "extra", "Excedente cartao normal");
-      } else if (total > 0 && total < curJourney) {
-        insBH.run(holerithId, dateStr, curJourney - total, "atraso", "Atraso cartao normal");
-      } else if (total === 0 && curJourney > 0) {
+      } else if (!hasAnyMark && curJourney > 0) {
         insBH.run(holerithId, dateStr, curJourney, "atraso", "Falta cartao normal");
+      } else {
+        const delayMinutes = calcDelayMinutes(row, dayOfWeek, workStart, saturdayWorkStart, hasSatComp);
+        if (delayMinutes > 0) {
+          insBH.run(holerithId, dateStr, delayMinutes, "atraso", "Atraso cartao normal");
+        }
       }
     }
   }
@@ -854,7 +882,7 @@ function recomputeBancoHorasForHolerith(
 function migrateLegacyCycleCutoverData() {
   try {
     const sRow: any = db.prepare(
-      "SELECT cycleStartDay, dailyJourney, saturdayCompensation, compDays FROM settings WHERE id = 1"
+      "SELECT cycleStartDay, dailyJourney, saturdayCompensation, compDays, workStart, saturdayWorkStart FROM settings WHERE id = 1"
     ).get();
     const cycleStartDay = clampCycleStartDay(sRow?.cycleStartDay);
     if (cycleStartDay <= 1) return;
@@ -957,7 +985,7 @@ function migrateLegacyCycleCutoverData() {
 
     if (changedHoleriths.size > 0) {
       for (const holerithId of changedHoleriths) {
-        recomputeBancoHorasForHolerith(holerithId, journeyMinutes, hasSatComp, compDays);
+        recomputeBancoHorasForHolerith(holerithId, journeyMinutes, hasSatComp, compDays, sRow?.workStart, sRow?.saturdayWorkStart);
       }
       console.log(
         `[MIGRATION] cycleStartDay cutover adjusted. moved=${moved}, merged=${merged}, holerithsRecomputed=${changedHoleriths.size}`
@@ -1583,7 +1611,7 @@ async function startServer() {
           }
 
           if (type === 'normal') {
-            recomputeBancoHorasForHolerith(h.id, journeyMinutes, hasSatComp, compDays);
+            recomputeBancoHorasForHolerith(h.id, journeyMinutes, hasSatComp, compDays, sRow?.workStart, sRow?.saturdayWorkStart);
           }
         };
 

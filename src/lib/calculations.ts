@@ -7,7 +7,9 @@ import {
   minutesToTime,
   normalizeOvernightEntries,
   parseCompDays,
+  resolveDelayMinutes,
   resolveDailyJourneyMinutes,
+  resolveExpectedStartMinutes,
   sumEntryWorkedMinutes,
   timeToMinutes
 } from './timeMath';
@@ -98,8 +100,10 @@ export {
   minutesToTime,
   normalizeOvernightEntries,
   parseCompDays,
+  resolveDelayMinutes,
   resolveDailyOvertimeDiscountMinutes,
   resolveDailyJourneyMinutes,
+  resolveExpectedStartMinutes,
   sumEntryWorkedMinutes,
   timeToMinutes
 };

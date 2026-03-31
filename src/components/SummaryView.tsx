@@ -6,6 +6,7 @@ import { ptBR } from 'date-fns/locale';
 import {
   calculateOvertime,
   normalizeOvernightEntries,
+  resolveDelayMinutes,
   resolveDailyJourneyMinutes,
   sumEntryWorkedMinutes,
   type Settings,
@@ -67,10 +68,17 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
         
         if (!isOvertimeCard && !isSunday) {
           if (entry.isDPAnnotation) return;
-          if (dailyMinutes < journeyMin && dailyMinutes > 0) {
-            totalAtrasoMinutes += (journeyMin - dailyMinutes);
-          } else if (dailyMinutes === 0) {
+          const hasAnyMark = [entry.entry1, entry.exit1, entry.entry2, entry.exit2, entry.entryExtra, entry.exitExtra]
+            .some((value) => !!String(value || '').trim());
+          if (!hasAnyMark) {
             totalAtrasoMinutes += journeyMin;
+          } else {
+            totalAtrasoMinutes += resolveDelayMinutes(entry, date.getDay(), {
+              workStart: settings.workStart,
+              saturdayWorkStart: settings.saturdayWorkStart,
+              saturdayCompensation: !!settings.saturdayCompensation,
+              toleranceMinutes: 5,
+            });
           }
         }
 
