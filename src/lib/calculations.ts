@@ -14,6 +14,173 @@ import {
   timeToMinutes
 } from './timeMath';
 
+export type CompanyRubricKey = string;
+
+export interface CompanyRubricEntry {
+  code: string;
+  label: string;
+}
+
+export type CompanyRubricMap = Record<CompanyRubricKey, CompanyRubricEntry>;
+
+export interface CompanyOvertimeRule {
+  id: string;
+  label: string;
+  rubricKey: string;
+  multiplier: number;
+  period?: 'day' | 'night' | 'any';
+  dayType?: 'weekday' | 'sunday' | 'any';
+  weeklyLimitMinutes?: number;
+  weeklyLimitGroup?: string;
+  monthlyLimitMinutes?: number;
+  monthlyLimitGroup?: string;
+  priority?: number;
+  active?: boolean;
+}
+
+export interface CompanyDailyOvertimeDiscountRule {
+  id: string;
+  label: string;
+  rubricKey: string;
+  thresholdHours: number;
+  discountMinutes: number;
+  priority?: number;
+  active?: boolean;
+}
+
+export interface CompanyCalculationConfig {
+  weeklyLimit?: number;
+  monthlyLimitHE?: number;
+  percentNight?: number;
+  cycleStartDay?: number;
+  roundingCarryover?: number;
+  overtimeRules?: CompanyOvertimeRule[];
+  dailyOvertimeDiscountRules?: CompanyDailyOvertimeDiscountRule[];
+}
+
+export interface CompanySettingsProfile {
+  id?: string;
+  cnpj: string;
+  name: string;
+  rubrics: CompanyRubricMap;
+  config: CompanyCalculationConfig;
+}
+
+export function buildSuggestedCompanyRubrics(): CompanyRubricMap {
+  return {
+    SALARIO_FIXO: { code: '0116', label: 'Salario Fixo' },
+    HE_50: { code: '1058', label: 'Hora Extra 50%' },
+    HE_75: { code: '3590', label: 'H.E. 50/25% (75%)' },
+    HE_100: { code: '2038', label: 'Hora Extra 100%' },
+    HE_125: { code: '3964', label: 'H.E. 100/25% (125%)' },
+    ADIC_NOT: { code: '1082', label: 'Adicional Noturno 25%' },
+    DSR_HE: { code: '3948', label: 'INT H EXTRA S/ DSR' },
+    DSR_NOT: { code: '3930', label: 'INT AD. NOT. S/ DSR' },
+    DESC_HE_1: { code: '9191', label: 'Desconto HE Faixa 1' },
+    DESC_HE_2: { code: '9192', label: 'Desconto HE Faixa 2' },
+    ATRASO: { code: '5142', label: 'Atrasos' },
+    DSR_ATRASO: { code: '5312', label: 'Perda DSR s/ Atraso' },
+  };
+}
+
+export function buildSuggestedOvertimeRules(config?: CompanyCalculationConfig): CompanyOvertimeRule[] {
+  const weeklyLimitMinutes = Math.max(0, Number(config?.weeklyLimit ?? 3) * 60);
+  const monthlyLimitMinutes = Math.max(0, Number(config?.monthlyLimitHE ?? 900));
+  return [
+    {
+      id: 'weekday-low-day',
+      label: 'HE base diurna',
+      rubricKey: 'HE_50',
+      multiplier: 1.5,
+      period: 'day',
+      dayType: 'weekday',
+      weeklyLimitMinutes,
+      weeklyLimitGroup: 'weekday-low',
+      monthlyLimitMinutes,
+      monthlyLimitGroup: 'weekday-low-day',
+      priority: 1,
+      active: true,
+    },
+    {
+      id: 'weekday-low-night',
+      label: 'HE base noturna',
+      rubricKey: 'HE_75',
+      multiplier: 1.875,
+      period: 'night',
+      dayType: 'weekday',
+      weeklyLimitMinutes,
+      weeklyLimitGroup: 'weekday-low',
+      monthlyLimitMinutes,
+      monthlyLimitGroup: 'weekday-low-night',
+      priority: 2,
+      active: true,
+    },
+    {
+      id: 'weekday-high-day',
+      label: 'HE excedente diurna',
+      rubricKey: 'HE_100',
+      multiplier: 2,
+      period: 'day',
+      dayType: 'weekday',
+      priority: 3,
+      active: true,
+    },
+    {
+      id: 'weekday-high-night',
+      label: 'HE excedente noturna',
+      rubricKey: 'HE_125',
+      multiplier: 2.5,
+      period: 'night',
+      dayType: 'weekday',
+      priority: 4,
+      active: true,
+    },
+    {
+      id: 'sunday-day',
+      label: 'Domingo diurno',
+      rubricKey: 'HE_100',
+      multiplier: 2,
+      period: 'day',
+      dayType: 'sunday',
+      priority: 5,
+      active: true,
+    },
+    {
+      id: 'sunday-night',
+      label: 'Domingo noturno',
+      rubricKey: 'HE_125',
+      multiplier: 2.5,
+      period: 'night',
+      dayType: 'sunday',
+      priority: 6,
+      active: true,
+    },
+  ];
+}
+
+export function buildSuggestedDailyOvertimeDiscountRules(): CompanyDailyOvertimeDiscountRule[] {
+  return [
+    {
+      id: 'discount-tier-1',
+      label: 'Desconto diario HE faixa 1',
+      rubricKey: 'DESC_HE_1',
+      thresholdHours: 4,
+      discountMinutes: 15,
+      priority: 1,
+      active: true,
+    },
+    {
+      id: 'discount-tier-2',
+      label: 'Desconto diario HE faixa 2',
+      rubricKey: 'DESC_HE_2',
+      thresholdHours: 6,
+      discountMinutes: 60,
+      priority: 2,
+      active: true,
+    },
+  ];
+}
+
 export interface Settings {
   baseSalary: number;
   monthlyHours: number;
@@ -50,6 +217,12 @@ export interface Settings {
   workEnd?: string;
   saturdayWorkStart?: string;
   saturdayWorkEnd?: string;
+  overtimeDiscountEnabled?: boolean;
+  overtimeDiscountThresholdOneHours?: number;
+  overtimeDiscountMinutesOne?: number;
+  overtimeDiscountThresholdTwoHours?: number;
+  overtimeDiscountMinutesTwo?: number;
+  companySettings?: CompanySettingsProfile | null;
 }
 
 export interface TimeEntry {
@@ -65,6 +238,7 @@ export interface TimeEntry {
   exitExtra: string;
   totalHours: string;
   isDPAnnotation?: boolean;
+  annotationText?: string;
   employeeName?: string;
   employeeCode?: string;
   role?: string;
@@ -92,6 +266,7 @@ export interface WeeklySummary {
   total125Minutes: number;
   totalValue: number;
   totalBancoHoras: number;
+  bucketTotals?: Record<string, { minutes: number; amount: number; label: string; code: string }>;
 }
 
 export type OvertimeCalculationResult = OvertimeComputationResult;

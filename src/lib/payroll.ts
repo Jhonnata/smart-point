@@ -1,3 +1,5 @@
+import type { CompanyCalculationConfig, CompanyRubricKey, CompanyRubricMap } from './calculations';
+
 // ---------------------------------------------------------
 //  FERIADOS FIXOS DO BRASIL
 // ---------------------------------------------------------
@@ -120,6 +122,70 @@ export interface PayrollParams {
   adiantamentoPercent?: number;
   adiantamentoPago?: AdiantamentoPago | null;
   cycleStartDay?: number;
+  rubrics?: Partial<CompanyRubricMap>;
+  companyConfig?: Partial<CompanyCalculationConfig>;
+  roundingCarryover?: number;
+  overtimeBuckets?: Array<{
+    rubricKey: string;
+    code: string;
+    label: string;
+    multiplier: number;
+    period?: 'day' | 'night' | 'any';
+    minutes: number;
+    amount: number;
+  }>;
+  discountBuckets?: Array<{
+    rubricKey: string;
+    code: string;
+    label: string;
+    minutes: number;
+    amount: number;
+  }>;
+}
+
+export interface PayrollLine {
+  code: string;
+  description: string;
+  reference: number | string | null;
+  amount: number;
+}
+
+const EMPTY_RUBRICS: CompanyRubricMap = {
+  SALARIO_FIXO: { code: '', label: '' },
+  HE_50: { code: '', label: '' },
+  HE_75: { code: '', label: '' },
+  HE_100: { code: '', label: '' },
+  HE_125: { code: '', label: '' },
+  ADIC_NOT: { code: '', label: '' },
+  DSR_HE: { code: '', label: '' },
+  DSR_NOT: { code: '', label: '' },
+  ATRASO: { code: '', label: '' },
+  DSR_ATRASO: { code: '', label: '' },
+};
+
+const RUBRIC_FALLBACK_LABELS: Record<CompanyRubricKey, string> = {
+  SALARIO_FIXO: 'Salario Fixo',
+  HE_50: 'Hora Extra 50%',
+  HE_75: 'Hora Extra 75%',
+  HE_100: 'Hora Extra 100%',
+  HE_125: 'Hora Extra 125%',
+  ADIC_NOT: 'Adicional Noturno',
+  DSR_HE: 'DSR sobre HE',
+  DSR_NOT: 'DSR sobre Adicional Noturno',
+  ATRASO: 'Atrasos',
+  DSR_ATRASO: 'DSR sobre Atraso',
+};
+
+function buildEffectiveRubrics(rubrics?: Partial<CompanyRubricMap>): CompanyRubricMap {
+  const output = { ...EMPTY_RUBRICS };
+  for (const key of Object.keys(output) as CompanyRubricKey[]) {
+    const entry = rubrics?.[key];
+    output[key] = {
+      code: String(entry?.code || '').trim(),
+      label: String(entry?.label || RUBRIC_FALLBACK_LABELS[key]).trim(),
+    };
+  }
+  return output;
 }
 
 export function calcularHoleriteCompleto({
@@ -138,10 +204,20 @@ export function calcularHoleriteCompleto({
   dependentes = 0,
   adiantamentoPercent = 45,
   adiantamentoPago = null,
-  cycleStartDay = 1
+  cycleStartDay = 1,
+  rubrics = {},
+  companyConfig = {},
+  roundingCarryover = 0
+  ,
+  overtimeBuckets = [],
+  discountBuckets = []
 }: PayrollParams) {
+  const effectiveRubrics = buildEffectiveRubrics(rubrics);
+  const effectiveCycleStartDay = Number(companyConfig.cycleStartDay ?? cycleStartDay);
+  const effectivePercentNight = Number(companyConfig.percentNight ?? percNight);
+  const previousRoundingCarryover = Math.max(0, Number(companyConfig.roundingCarryover ?? roundingCarryover ?? 0));
   // 1) Dias úteis e domingos/feriados
-  const { diasUteis, domingosEFeriados, feriados } = getDiasUteisEDomingos(mes, ano, cycleStartDay);
+  const { diasUteis, domingosEFeriados, feriados } = getDiasUteisEDomingos(mes, ano, effectiveCycleStartDay);
 
   // 2) Valor hora
   const valorHora = salarioBase / (horasMensais || 1);
@@ -151,19 +227,38 @@ export function calcularHoleriteCompleto({
   // HE 75% = HE 50% + Adicional Noturno
   // HE 125% = HE 100% + Adicional Noturno
   const rate50 = valorHora * (1 + perc50 / 100);
-  const rate75 = valorHora * (1 + (perc50 + percNight) / 100);
   const rate100 = valorHora * (1 + perc100 / 100);
-  const rate125 = valorHora * (1 + (perc100 + percNight) / 100);
+  const rate75 = rate50 * (1 + effectivePercentNight / 100);
+  const rate125 = rate100 * (1 + effectivePercentNight / 100);
 
   const v50 = he50 * rate50;
   const v75 = he75 * rate75;
   const v100 = he100 * rate100;
   const v125 = he125 * rate125;
-  
-  const totalHorasExtras = v50 + v75 + v100 + v125;
+  const hasDynamicBuckets = overtimeBuckets.length > 0;
+  const additionalNightFactor = 1 + effectivePercentNight / 100;
+  const adicionalNoturnoDinamico = overtimeBuckets.reduce((sum, bucket) => {
+    if (bucket.period !== 'night') return sum;
+    if (effectivePercentNight <= 0) return sum;
+    const baseAmount = (bucket.minutes / 60) * valorHora * (bucket.multiplier / additionalNightFactor);
+    return sum + Math.max(0, bucket.amount - baseAmount);
+  }, 0);
+  const adicionalNoturno = hasDynamicBuckets
+    ? adicionalNoturnoDinamico
+    : (he75 * (rate75 - rate50)) + (he125 * (rate125 - rate100));
+
+  const totalHorasExtrasDiurnas = hasDynamicBuckets
+    ? overtimeBuckets.filter((bucket) => bucket.period !== 'night').reduce((sum, bucket) => sum + bucket.amount, 0)
+    : v50 + v100;
+  const totalHorasExtrasNoturnas = hasDynamicBuckets
+    ? overtimeBuckets.filter((bucket) => bucket.period === 'night').reduce((sum, bucket) => sum + bucket.amount, 0)
+    : v75 + v125;
+  const totalHorasExtras = totalHorasExtrasDiurnas + totalHorasExtrasNoturnas;
 
   // 4) DSR sobre horas extras
-  const valorDSR = diasUteis > 0 ? (totalHorasExtras / diasUteis) * domingosEFeriados : 0;
+  const dsrSobreHeDiurna = diasUteis > 0 ? (totalHorasExtrasDiurnas / diasUteis) * domingosEFeriados : 0;
+  const dsrSobreHeNoturna = diasUteis > 0 ? (totalHorasExtrasNoturnas / diasUteis) * domingosEFeriados : 0;
+  const valorDSR = dsrSobreHeDiurna + dsrSobreHeNoturna;
   const descontoDSRAtraso = diasUteis > 0 ? (atraso / diasUteis) * domingosEFeriados : 0;
 
   // 5) Total proventos
@@ -243,14 +338,18 @@ export function calcularHoleriteCompleto({
   if (irRetidoNoFechamento < 0) irRetidoNoFechamento = 0;
 
   // 10) Total de descontos
-  const totalDescontosReal = atraso + descontoDSRAtraso + inss + irRetidoNoFechamento + adiantamentoBruto;
+  const totalDescontosReal = atraso + descontoDSRAtraso + inss + irRetidoNoFechamento + adiantamentoBruto + previousRoundingCarryover;
 
   // 11) Arredondamento automático e totalDescontos arredondado
   const totalDescontos = Number(totalDescontosReal.toFixed(2));
-  const arredondamento = Number((totalDescontos - totalDescontosReal).toFixed(2));
+  const liquidoSemArredondamento = Number((totalProventos - totalDescontos).toFixed(2));
+  const liquidoArredondado = liquidoSemArredondamento > 0 && !Number.isInteger(liquidoSemArredondamento)
+    ? Math.ceil(liquidoSemArredondamento)
+    : liquidoSemArredondamento;
+  const arredondamentoAplicado = Number((liquidoArredondado - liquidoSemArredondamento).toFixed(2));
 
   // 12) Liquido do pagamento final
-  const liquido = Number((totalProventos - totalDescontos).toFixed(2));
+  const liquido = Number(liquidoArredondado.toFixed(2));
 
   // 13) Liquido total recebido no mês
   const liquidoTotalRecebido = Number((liquido + adiantamentoLiquido).toFixed(2));
@@ -258,16 +357,55 @@ export function calcularHoleriteCompleto({
   // 14) Informações sobre IR do mês
   const totalIRRetidoNoMes = Number((irRetidoNoAdiantamento + irRetidoNoFechamento).toFixed(2));
 
+  const overtimeLines: PayrollLine[] = hasDynamicBuckets
+    ? overtimeBuckets.map((bucket) => {
+        const rubric = effectiveRubrics[bucket.rubricKey] || { code: bucket.code || '', label: bucket.label || bucket.rubricKey };
+        return {
+          code: rubric.code || bucket.code || '',
+          description: rubric.label || bucket.label || bucket.rubricKey,
+          reference: Number((bucket.minutes / 60).toFixed(2)),
+          amount: Number(bucket.amount.toFixed(2)),
+        };
+      })
+    : [
+        { code: effectiveRubrics.HE_50.code, description: effectiveRubrics.HE_50.label, reference: Number(he50.toFixed(2)), amount: Number(v50.toFixed(2)) },
+        { code: effectiveRubrics.HE_75.code, description: effectiveRubrics.HE_75.label, reference: Number(he75.toFixed(2)), amount: Number(v75.toFixed(2)) },
+        { code: effectiveRubrics.HE_100.code, description: effectiveRubrics.HE_100.label, reference: Number(he100.toFixed(2)), amount: Number(v100.toFixed(2)) },
+        { code: effectiveRubrics.HE_125.code, description: effectiveRubrics.HE_125.label, reference: Number(he125.toFixed(2)), amount: Number(v125.toFixed(2)) },
+      ].filter((line) => Math.abs(line.amount) > 0);
+
+  const lines: PayrollLine[] = [
+    { code: effectiveRubrics.SALARIO_FIXO.code, description: effectiveRubrics.SALARIO_FIXO.label, reference: horasMensais, amount: Number(salarioBase.toFixed(2)) },
+    ...overtimeLines,
+    { code: effectiveRubrics.ADIC_NOT.code, description: effectiveRubrics.ADIC_NOT.label, reference: hasDynamicBuckets ? Number((overtimeBuckets.filter((bucket) => bucket.period === 'night').reduce((sum, bucket) => sum + bucket.minutes, 0) / 60).toFixed(2)) : Number((he75 + he125).toFixed(2)), amount: Number(adicionalNoturno.toFixed(2)) },
+    { code: effectiveRubrics.DSR_HE.code, description: effectiveRubrics.DSR_HE.label, reference: null, amount: Number(dsrSobreHeDiurna.toFixed(2)) },
+    { code: effectiveRubrics.DSR_NOT.code, description: effectiveRubrics.DSR_NOT.label, reference: null, amount: Number(dsrSobreHeNoturna.toFixed(2)) },
+    ...discountBuckets.map((bucket) => {
+      const rubric = effectiveRubrics[bucket.rubricKey] || { code: bucket.code || '', label: bucket.label || bucket.rubricKey };
+      return {
+        code: rubric.code || bucket.code || '',
+        description: rubric.label || bucket.label || bucket.rubricKey,
+        reference: Number((bucket.minutes / 60).toFixed(2)),
+        amount: Number((-Math.abs(bucket.amount)).toFixed(2)),
+      };
+    }),
+    { code: effectiveRubrics.ATRASO.code, description: effectiveRubrics.ATRASO.label, reference: Number(atraso > 0 ? (atraso / (valorHora || 1)).toFixed(2) : 0), amount: Number((-atraso).toFixed(2)) },
+    { code: effectiveRubrics.DSR_ATRASO.code, description: effectiveRubrics.DSR_ATRASO.label, reference: null, amount: Number((-descontoDSRAtraso).toFixed(2)) },
+  ].filter((line) => Math.abs(line.amount) > 0);
+
   return {
     mes,
     ano,
     diasUteis,
     domingosEFeriados,
     feriadosConsiderados: feriados,
+    lines,
     valores: {
       salarioBase: Number(salarioBase.toFixed(2)),
       valorHora: Number(valorHora.toFixed(2)),
       totalHorasExtras: Number(totalHorasExtras.toFixed(2)),
+      dsrSobreHeDiurna: Number(dsrSobreHeDiurna.toFixed(2)),
+      dsrSobreHeNoturna: Number(dsrSobreHeNoturna.toFixed(2)),
       valorDSR: Number(valorDSR.toFixed(2)),
       totalProventos: Number(totalProventos.toFixed(2)),
 
@@ -287,7 +425,10 @@ export function calcularHoleriteCompleto({
 
       atraso: Number(atraso.toFixed(2)),
       descontoDSRAtraso: Number(descontoDSRAtraso.toFixed(2)),
-      arredondamento: Number(arredondamento.toFixed(2)),
+      arredondamentoAnterior: Number(previousRoundingCarryover.toFixed(2)),
+      arredondamento: Number(arredondamentoAplicado.toFixed(2)),
+      proximoArredondamento: Number(arredondamentoAplicado.toFixed(2)),
+      liquidoSemArredondamento: Number(liquidoSemArredondamento.toFixed(2)),
       totalDescontos: Number(totalDescontos.toFixed(2)),
 
       liquido: Number(liquido.toFixed(2)),

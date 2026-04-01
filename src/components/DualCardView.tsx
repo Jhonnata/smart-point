@@ -1,5 +1,5 @@
 import React from 'react';
-import { ArrowLeft, Save, Upload, Calendar, Clock, Info } from 'lucide-react';
+import { ArrowLeft, Save, Upload, Calendar, Clock, Info, MessageSquareMore } from 'lucide-react';
 import { differenceInCalendarDays, parseISO, isValid } from 'date-fns';
 import { toast } from 'sonner';
 import {
@@ -27,11 +27,26 @@ const WEEKDAY_ABBR = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'] as const;
 const MONTH_ABBR = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'] as const;
 const WEEK_TARGET_HOURS = 44;
 type TimeField = 'entry1' | 'exit1' | 'entry2' | 'exit2' | 'entryExtra' | 'exitExtra';
+type EditingCell = { side: 'left' | 'right'; id: string; field: TimeField } | null;
 
 function minutesToHHMM(min: number): string {
   const h = Math.floor(min / 60);
   const m = Math.round(min % 60);
   return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+}
+
+function formatDiscountLabel(minutes: number): string {
+  if (minutes <= 0) return '';
+  if (minutes % 60 === 0) return `${minutes / 60}h`;
+  return `${minutes}min`;
+}
+
+function normalizePassiveDayLabel(annotationText?: string): string {
+  const normalized = String(annotationText || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized === 'domingo') return 'domingo';
+  if (normalized === 'feriado') return 'feriado';
+  return '';
 }
 
 function normalizeTimeInput(raw: string, finalize: boolean): string {
@@ -80,7 +95,7 @@ function getCorrectDate(day: number, monthStr: string, cycleStartDay: number): s
   const [year, month] = monthStr.split('-').map(Number);
   let dYear = year;
   let dMonth = month;
-  
+
   if (cycleStartDay > 1 && day > cycleStartDay) {
     dMonth--;
     if (dMonth === 0) {
@@ -88,7 +103,7 @@ function getCorrectDate(day: number, monthStr: string, cycleStartDay: number): s
       dYear--;
     }
   }
-  
+
   return `${dYear}-${dMonth.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
 }
 
@@ -137,11 +152,11 @@ function resolveEntryDiscountMinutes(entry: TimeEntry, isOvertimeCardEntry: bool
     settings.compDays
   );
   const rawOvertimeMinutes = dayOfWeek === 0 ? workedMinutes : Math.max(0, workedMinutes - journeyMinutes);
-  return resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes);
+  return resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes, settings);
 }
 
 export default function DualCardView({ entries, onSave, onBack, month, onUploadClick, settings, disableSave }: Props) {
-  const monthStr = React.useMemo(() => month || (entries[0]?.date || '').substring(0,7), [entries, month]);
+  const monthStr = React.useMemo(() => month || (entries[0]?.date || '').substring(0, 7), [entries, month]);
   const weeklyTargetMinutes = ((settings.weeklyLimit && settings.weeklyLimit > 0 ? settings.weeklyLimit : WEEK_TARGET_HOURS) * 60);
   const competenciaPeriodLabel = React.useMemo(
     () => getCompetenciaPeriodLabel(monthStr, settings.cycleStartDay || 15),
@@ -150,9 +165,8 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
 
   const normalList = React.useMemo(() => {
     const cycleStart = settings.cycleStartDay || 15;
-    // Key by the physical card line number ("day" field = "01".."31").
     const map: Record<number, TimeEntry> = {};
-    entries.forEach(e => {
+    entries.forEach((e) => {
       if (!!e.isOvertimeCard) return;
       const d = e.day ? parseInt(e.day, 10) : NaN;
       if (!isNaN(d) && d >= 1 && d <= 31) map[d] = e;
@@ -161,10 +175,11 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
     const full: TimeEntry[] = [];
     for (let d = 1; d <= 31; d++) {
       const date = getCorrectDate(d, monthStr, cycleStart);
-      const day = d.toString().padStart(2,'0');
-      full.push(map[d]
-        ? { ...map[d], day, date, workDate: date }
-        : { id: `normal-${day}`, date, day, entry1:'',exit1:'',entry2:'',exit2:'',entryExtra:'',exitExtra:'', totalHours:'', isOvertimeCard:false }
+      const day = d.toString().padStart(2, '0');
+      full.push(
+        map[d]
+          ? { ...map[d], day, date, workDate: date }
+          : { id: `normal-${day}`, date, day, entry1: '', exit1: '', entry2: '', exit2: '', entryExtra: '', exitExtra: '', totalHours: '', annotationText: '', isOvertimeCard: false }
       );
     }
     return full;
@@ -173,7 +188,7 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
   const overtimeList = React.useMemo(() => {
     const cycleStart = settings.cycleStartDay || 15;
     const map: Record<number, TimeEntry> = {};
-    entries.forEach(e => {
+    entries.forEach((e) => {
       if (!e.isOvertimeCard) return;
       const d = e.day ? parseInt(e.day, 10) : NaN;
       if (!isNaN(d) && d >= 1 && d <= 31) map[d] = e;
@@ -182,10 +197,11 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
     const full: TimeEntry[] = [];
     for (let d = 1; d <= 31; d++) {
       const date = getCorrectDate(d, monthStr, cycleStart);
-      const day = d.toString().padStart(2,'0');
-      full.push(map[d]
-        ? { ...map[d], day, date, workDate: date }
-        : { id: `overtime-${day}`, date, day, entry1:'',exit1:'',entry2:'',exit2:'',entryExtra:'',exitExtra:'', totalHours:'', isOvertimeCard:true }
+      const day = d.toString().padStart(2, '0');
+      full.push(
+        map[d]
+          ? { ...map[d], day, date, workDate: date }
+          : { id: `overtime-${day}`, date, day, entry1: '', exit1: '', entry2: '', exit2: '', entryExtra: '', exitExtra: '', totalHours: '', annotationText: '', isOvertimeCard: true }
       );
     }
     return full;
@@ -193,18 +209,36 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
 
   const [left, setLeft] = React.useState(normalList);
   const [right, setRight] = React.useState(overtimeList);
+  const [editingCell, setEditingCell] = React.useState<EditingCell>(null);
+  const [activeCardTab, setActiveCardTab] = React.useState<'left' | 'right'>('left');
+  const hasOvertimeData = React.useMemo(
+    () => right.some((row) =>
+      !!calcTotal(row) ||
+      !!row.entry1 || !!row.exit1 || !!row.entry2 || !!row.exit2 || !!row.entryExtra || !!row.exitExtra ||
+      !!String(row.annotationText || '').trim() ||
+      !!row.isDPAnnotation
+    ),
+    [right]
+  );
 
-  React.useEffect(() => { setLeft(normalList); }, [normalList]);
-  React.useEffect(() => { setRight(overtimeList); }, [overtimeList]);
+  React.useEffect(() => {
+    setLeft(normalList);
+  }, [normalList]);
+
+  React.useEffect(() => {
+    setRight(overtimeList);
+  }, [overtimeList]);
+
+  React.useEffect(() => {
+    if (activeCardTab === 'right' && !hasOvertimeData) {
+      setActiveCardTab('left');
+    }
+  }, [activeCardTab, hasOvertimeData]);
 
   const commit = () => {
     if (disableSave) return;
-    const leftNormalizedByDay = new Map(
-      normalizeOvernightEntries(left).map((row) => [row.day || '', row])
-    );
-    const rightNormalizedByDay = new Map(
-      normalizeOvernightEntries(right).map((row) => [row.day || '', row])
-    );
+    const leftNormalizedByDay = new Map(normalizeOvernightEntries(left).map((row) => [row.day || '', row]));
+    const rightNormalizedByDay = new Map(normalizeOvernightEntries(right).map((row) => [row.day || '', row]));
 
     const leftFinal = left.map((e) => {
       const normalized = leftNormalizedByDay.get(e.day || '') || e;
@@ -217,368 +251,411 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
     onSave([...leftFinal, ...rightFinal]);
   };
 
-  const onEdit = (side: 'left'|'right', id: string, field: keyof TimeEntry, value: string) => {
-    if (side === 'left') setLeft(prev => prev.map(e => e.id === id ? { ...e, [field]: value } as TimeEntry : e));
-    else setRight(prev => prev.map(e => e.id === id ? { ...e, [field]: value } as TimeEntry : e));
+  const onEdit = (side: 'left' | 'right', id: string, field: keyof TimeEntry, value: string) => {
+    if (side === 'left') {
+      setLeft((prev) => prev.map((e) => (e.id === id ? ({ ...e, [field]: value } as TimeEntry) : e)));
+    } else {
+      setRight((prev) => prev.map((e) => (e.id === id ? ({ ...e, [field]: value } as TimeEntry) : e)));
+    }
   };
 
-  const onEditTime = (side: 'left'|'right', id: string, field: TimeField, rawValue: string) => {
+  const onEditTime = (side: 'left' | 'right', id: string, field: TimeField, rawValue: string) => {
     onEdit(side, id, field, normalizeTimeInput(rawValue, false));
   };
 
-  const onBlurTime = (side: 'left'|'right', id: string, field: TimeField, rawValue: string) => {
+  const onBlurTime = (side: 'left' | 'right', id: string, field: TimeField, rawValue: string) => {
     onEdit(side, id, field, normalizeTimeInput(rawValue, true));
   };
 
+  const startEditing = (side: 'left' | 'right', id: string, field: TimeField) => {
+    setEditingCell({ side, id, field });
+  };
+
+  const stopEditing = () => {
+    setEditingCell(null);
+  };
+
+  const renderTimeCell = (entry: TimeEntry, side: 'left' | 'right', field: TimeField, bordered?: boolean) => {
+    const isEditing = editingCell?.side === side && editingCell?.id === entry.id && editingCell?.field === field;
+    const value = entry[field] || '';
+
+    return (
+      <td className={cn("px-0 py-0.5 text-center", bordered && "border-r border-zinc-100")}>
+        {isEditing ? (
+          <input
+            autoFocus
+            value={value}
+            onChange={(ev) => onEditTime(side, entry.id, field, ev.target.value)}
+            onBlur={(ev) => {
+              onBlurTime(side, entry.id, field, ev.target.value);
+              stopEditing();
+            }}
+            onKeyDown={(ev) => {
+              if (ev.key === 'Enter') {
+                onBlurTime(side, entry.id, field, (ev.target as HTMLInputElement).value);
+                stopEditing();
+              }
+              if (ev.key === 'Escape') {
+                stopEditing();
+              }
+            }}
+            className="mx-auto h-6 w-[48px] rounded-md border border-zinc-300 bg-white px-1 text-center text-[10px] font-bold text-zinc-900 outline-none transition-all focus:border-zinc-900"
+            placeholder="--:--"
+            inputMode="numeric"
+            maxLength={5}
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => startEditing(side, entry.id, field)}
+            className={cn(
+              "mx-auto flex h-6 min-w-[48px] items-center justify-center rounded-md border px-0.5 text-center text-[10px] font-bold transition-colors focus:outline-none",
+              value
+                ? "border-transparent text-zinc-900 hover:border-zinc-200 hover:bg-zinc-100 focus:border-zinc-200 focus:bg-zinc-100"
+                : "border-transparent text-zinc-400 hover:border-zinc-200 hover:bg-zinc-100 focus:border-zinc-200 focus:bg-zinc-100"
+            )}
+            title="Clique para editar"
+          >
+            {value || '--:--'}
+          </button>
+        )}
+      </td>
+    );
+  };
+
   const toggleJustification = (id: string) => {
-    setLeft(prev => prev.map(e => e.id === id ? { ...e, isDPAnnotation: !e.isDPAnnotation } : e));
+    setLeft((prev) => prev.map((e) => (e.id === id ? { ...e, isDPAnnotation: !e.isDPAnnotation } : e)));
   };
 
   const applyStandardSchedule = () => {
-    const baseEntry1 = normalizeTimeInput(settings.workStart || "12:00", true);
-    const baseExit1 = normalizeTimeInput(settings.lunchStart || "17:00", true);
-    const baseEntry2 = normalizeTimeInput(settings.lunchEnd || "18:00", true);
-    const baseExit2 = normalizeTimeInput(settings.workEnd || "21:00", true);
-    const saturdayEntry = normalizeTimeInput(settings.saturdayWorkStart || "12:00", true);
-    const saturdayExit = normalizeTimeInput(settings.saturdayWorkEnd || "16:00", true);
+    const baseEntry1 = normalizeTimeInput(settings.workStart || '12:00', true);
+    const baseExit1 = normalizeTimeInput(settings.lunchStart || '17:00', true);
+    const baseEntry2 = normalizeTimeInput(settings.lunchEnd || '18:00', true);
+    const baseExit2 = normalizeTimeInput(settings.workEnd || '21:00', true);
+    const saturdayEntry = normalizeTimeInput(settings.saturdayWorkStart || '12:00', true);
+    const saturdayExit = normalizeTimeInput(settings.saturdayWorkEnd || '16:00', true);
 
-    setLeft(prev => prev.map(e => {
-      const date = parseISO(e.date);
-      if (!isValid(date)) return e;
-      const dayOfWeek = date.getDay();
+    setLeft((prev) =>
+      prev.map((e) => {
+        const date = parseISO(e.date);
+        if (!isValid(date)) return e;
+        const dayOfWeek = date.getDay();
 
-      if (dayOfWeek >= 1 && dayOfWeek <= 5) {
-        let exit2 = baseExit2;
-        const compDays = (settings.compDays || '1,2,3,4').split(',').map(Number);
-        if (settings.saturdayCompensation && compDays.includes(dayOfWeek)) {
-          exit2 = minutesToHHMM(timeToMinutes(baseExit2) + 60);
-        }
-        return {
-          ...e,
-          entry1: baseEntry1,
-          exit1: baseExit1,
-          entry2: baseEntry2,
-          exit2
-        };
-      }
-
-      if (dayOfWeek === 6) {
-        if (settings.saturdayCompensation) {
+        if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+          let exit2 = baseExit2;
+          const compDays = (settings.compDays || '1,2,3,4').split(',').map(Number);
+          if (settings.saturdayCompensation && compDays.includes(dayOfWeek)) {
+            exit2 = minutesToHHMM(timeToMinutes(baseExit2) + 60);
+          }
           return {
             ...e,
-            entry1: '',
-            exit1: '',
+            entry1: baseEntry1,
+            exit1: baseExit1,
+            entry2: baseEntry2,
+            exit2
+          };
+        }
+
+        if (dayOfWeek === 6) {
+          if (settings.saturdayCompensation) {
+            return {
+              ...e,
+              entry1: '',
+              exit1: '',
+              entry2: '',
+              exit2: '',
+              entryExtra: '',
+              exitExtra: ''
+            };
+          }
+          return {
+            ...e,
+            entry1: saturdayEntry,
+            exit1: saturdayExit,
             entry2: '',
             exit2: '',
             entryExtra: '',
             exitExtra: ''
           };
         }
-        return {
-          ...e,
-          entry1: saturdayEntry,
-          exit1: saturdayExit,
-          entry2: '',
-          exit2: '',
-          entryExtra: '',
-          exitExtra: ''
-        };
-      }
 
-      return e;
-    }));
-    toast.success("Horario padrao aplicado (segunda a sabado).");
+        return e;
+      })
+    );
+    toast.success('Horario padrao aplicado (segunda a sabado).');
   };
 
-  const renderTable = (list: TimeEntry[], side: 'left'|'right') => (
-    <div className="bg-white rounded-[2rem] border border-zinc-100 overflow-hidden shadow-sm">
-      <div className={cn("px-6 py-4 text-xs font-black uppercase tracking-widest border-b flex items-center justify-between", side==='right'?"bg-red-50 text-red-700 border-red-100":"bg-zinc-50 text-zinc-600 border-zinc-100")}
+  const renderTable = (list: TimeEntry[], side: 'left' | 'right') => (
+    <div className="overflow-hidden rounded-[24px] border border-zinc-200 bg-white shadow-[0_8px_24px_rgba(0,0,0,0.04)]">
+      <div
+        className={cn(
+          "flex items-center justify-between border-b px-4 py-3 text-[11px] font-black uppercase tracking-[0.12em]",
+          side === 'right' ? 'border-red-200 bg-red-50 text-red-700' : 'border-zinc-200 bg-zinc-50 text-zinc-700'
+        )}
       >
-        <span>{side==='right'?'Cartão de Horas Extras':'Cartão Normal'}</span>
         <div className="flex items-center gap-2">
-           {side === 'left' && (
-              <button 
-                onClick={applyStandardSchedule}
-                className="px-2 py-1 bg-white border border-zinc-200 rounded text-[9px] hover:bg-zinc-900 hover:text-white transition-colors uppercase font-black"
-                title="Preenche segunda a sexta com jornada padrao e sabado conforme configuracao"
-              >
-                Horário Padrão
-              </button>
-           )}
-           <div className={cn("w-2 h-2 rounded-full", side==='right'?"bg-red-500":"bg-zinc-400")} />
+          <span>{side === 'right' ? 'Cartão de Horas Extras' : 'Cartão Normal'}</span>
+          <div className={cn('h-2.5 w-2.5 rounded-full', side === 'right' ? 'bg-red-500' : 'bg-zinc-400')} />
         </div>
+        {side === 'left' && (
+          <button
+            onClick={applyStandardSchedule}
+            className="rounded border border-zinc-200 bg-white px-2 py-1 text-[9px] font-black uppercase transition-colors hover:bg-zinc-900 hover:text-white"
+            title="Preenche segunda a sexta com jornada padrao e sabado conforme configuracao"
+          >
+            Horário Padrão
+          </button>
+        )}
       </div>
+
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] text-[11px]">
+        <table className="w-full min-w-[620px] border-collapse text-[10px]">
           <thead>
-            <tr className="text-left bg-zinc-50/50">
-              <th rowSpan={2} className="px-2 sm:px-4 py-2 sm:py-3 w-24 sm:w-28 text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100">Dia</th>
-              <th colSpan={2} className="px-1 sm:px-2 py-1.5 sm:py-2 text-center text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100 border-l border-zinc-100 bg-zinc-100/30">Manhã</th>
-              <th colSpan={2} className="px-1 sm:px-2 py-1.5 sm:py-2 text-center text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100 border-l border-zinc-100 bg-zinc-100/30">Tarde</th>
-              <th colSpan={2} className="px-1 sm:px-2 py-1.5 sm:py-2 text-center text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100 border-l border-zinc-100 bg-zinc-100/30">Extra</th>
-              <th rowSpan={2} className="px-1 sm:px-2 py-2 sm:py-3 text-[10px] font-black uppercase tracking-widest text-zinc-400 text-right border-b border-zinc-100 border-l border-zinc-100">Total</th>
+            <tr className="bg-zinc-50">
+              <th rowSpan={2} className="w-[58px] border-b border-r border-zinc-200 px-2 py-2 text-left text-[9px] font-black uppercase tracking-[0.1em] text-zinc-500">Dia</th>
+              <th colSpan={2} className="border-b border-l border-zinc-200 px-1 py-2 text-center text-[9px] font-black uppercase tracking-[0.1em] text-zinc-500">Manhã</th>
+              <th colSpan={2} className="border-b border-l border-zinc-200 px-1 py-2 text-center text-[9px] font-black uppercase tracking-[0.1em] text-zinc-500">Tarde</th>
+              <th colSpan={2} className="border-b border-l border-zinc-200 px-1 py-2 text-center text-[9px] font-black uppercase tracking-[0.1em] text-zinc-500">Extra</th>
+              <th rowSpan={2} className="w-[64px] border-b border-l border-zinc-200 px-2 py-2 text-right text-[9px] font-black uppercase tracking-[0.1em] text-zinc-500">Total</th>
             </tr>
-            <tr className="text-left bg-zinc-50/50">
-              <th className="px-1 sm:px-2 py-1 text-[9px] font-black uppercase text-zinc-400 border-l border-zinc-100 text-center">Ent.</th>
-              <th className="px-1 sm:px-2 py-1 text-[9px] font-black uppercase text-zinc-400 text-center">Sai.</th>
-              <th className="px-1 sm:px-2 py-1 text-[9px] font-black uppercase text-zinc-400 border-l border-zinc-100 text-center">Ent.</th>
-              <th className="px-1 sm:px-2 py-1 text-[9px] font-black uppercase text-zinc-400 text-center">Sai.</th>
-              <th className="px-1 sm:px-2 py-1 text-[9px] font-black uppercase text-zinc-400 border-l border-zinc-100 text-center">Ent.</th>
-              <th className="px-1 sm:px-2 py-1 text-[9px] font-black uppercase text-zinc-400 text-center">Sai.</th>
+            <tr className="bg-zinc-50/70">
+              <th className="border-l border-zinc-200 px-0.5 py-1 text-center text-[8px] font-black uppercase text-zinc-500">Ent.</th>
+              <th className="px-0.5 py-1 text-center text-[8px] font-black uppercase text-zinc-500">Sai.</th>
+              <th className="border-l border-zinc-200 px-0.5 py-1 text-center text-[8px] font-black uppercase text-zinc-500">Ent.</th>
+              <th className="px-0.5 py-1 text-center text-[8px] font-black uppercase text-zinc-500">Sai.</th>
+              <th className="border-l border-zinc-200 px-0.5 py-1 text-center text-[8px] font-black uppercase text-zinc-500">Ent.</th>
+              <th className="px-0.5 py-1 text-center text-[8px] font-black uppercase text-zinc-500">Sai.</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-50">
-          {(() => {
-            const normalizedByDay = new Map(
-              normalizeOvernightEntries(list).map((row) => [row.day || '', row])
-            );
-            const rows: React.ReactNode[] = [];
-            let weekStartDay: string | null = null;
-            let weekStartLabel: string | null = null;
-            let weekTotalMinutes = 0;
+          <tbody>
+            {(() => {
+              const normalizedByDay = new Map(normalizeOvernightEntries(list).map((row) => [row.day || '', row]));
+              const rows: React.ReactNode[] = [];
+              let weekStartDay: string | null = null;
+              let weekStartLabel: string | null = null;
+              let weekTotalMinutes = 0;
 
-            list.forEach((e, idx) => {
-              const normalizedEntry = normalizedByDay.get(e.day || '') || e;
-              const isOvertimeCardEntry = side === 'right';
-              const discountMinutes = resolveEntryDiscountMinutes(normalizedEntry, isOvertimeCardEntry, settings);
-              const discountLabel = discountMinutes === 60 ? '1h' : discountMinutes === 15 ? '15min' : '';
-              const date = parseISO(e.date);
-              const validDate = isValid(date);
-              const dayOfWeek = validDate ? date.getDay() : -1;
-              const isWeekend = validDate && (dayOfWeek === 0 || dayOfWeek === 6);
-              const dayDisplayName = validDate ? WEEKDAY_ABBR[dayOfWeek] : '';
-              const monthDisplayName = validDate ? MONTH_ABBR[date.getMonth()] : '';
-              const isMonToSat = validDate && dayOfWeek >= 1 && dayOfWeek <= 6;
+              list.forEach((e, idx) => {
+                const normalizedEntry = normalizedByDay.get(e.day || '') || e;
+                const isOvertimeCardEntry = side === 'right';
+                const discountMinutes = resolveEntryDiscountMinutes(normalizedEntry, isOvertimeCardEntry, settings);
+                const discountLabel = formatDiscountLabel(discountMinutes);
+                const date = parseISO(e.date);
+                const validDate = isValid(date);
+                const dayOfWeek = validDate ? date.getDay() : -1;
+                const isWeekend = validDate && (dayOfWeek === 0 || dayOfWeek === 6);
+                const passiveDayLabel = normalizePassiveDayLabel(e.annotationText);
+                const showAnnotationIcon = !!String(e.annotationText || '').trim() && !passiveDayLabel;
+                const dayDisplayName = validDate ? WEEKDAY_ABBR[dayOfWeek] : '';
+                const monthDisplayName = validDate ? MONTH_ABBR[date.getMonth()] : '';
+                const isMonToSat = validDate && dayOfWeek >= 1 && dayOfWeek <= 6;
 
-              if (isMonToSat && weekStartDay === null) {
-                weekStartDay = e.day || '';
-                weekStartLabel = WEEKDAY_ABBR[dayOfWeek];
-              }
-              if (isMonToSat) {
-                weekTotalMinutes += sumEntryWorkedMinutes(normalizedEntry);
-              }
-
-              rows.push(
-                <tr key={`${side}-${e.day}`} className={cn("group transition-colors", isWeekend ? "bg-zinc-50/30" : "hover:bg-zinc-50/50")}>
-                  <td className="px-2 sm:px-4 py-1.5 sm:py-2 border-r border-zinc-50">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-black text-zinc-900">{e.day}</span>
-                      <span className="text-[10px] font-bold text-zinc-400 tracking-tighter truncate max-w-[60px]">{dayDisplayName}</span>
-                      <span className="text-[9px] font-semibold text-zinc-400 uppercase">{monthDisplayName}</span>
-                      {side === 'left' && (
-                        <button
-                          type="button"
-                          onClick={() => toggleJustification(e.id)}
-                          className={cn(
-                            "ml-1 inline-flex items-center justify-center w-5 h-5 rounded-md border transition-colors",
-                            e.isDPAnnotation
-                              ? "bg-emerald-50 border-emerald-200 text-emerald-600"
-                              : "bg-white border-zinc-200 text-zinc-300 hover:text-zinc-500 hover:border-zinc-300"
-                          )}
-                          title={e.isDPAnnotation ? "Atraso justificado" : "Marcar atraso justificado"}
-                          aria-label={e.isDPAnnotation ? "Atraso justificado" : "Marcar atraso justificado"}
-                        >
-                          <Clock className="w-3 h-3" />
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-0.5 sm:px-1 py-1">
-                    <input
-                      value={e.entry1 || ''}
-                      onChange={ev => onEditTime(side, e.id, 'entry1', ev.target.value)}
-                      onBlur={ev => onBlurTime(side, e.id, 'entry1', ev.target.value)}
-                      className="w-full px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg border border-zinc-200 text-[10px] sm:text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
-                      placeholder="--:--"
-                      inputMode="numeric"
-                      maxLength={5}
-                    />
-                  </td>
-                  <td className="px-0.5 sm:px-1 py-1 border-r border-zinc-50">
-                    <input
-                      value={e.exit1 || ''}
-                      onChange={ev => onEditTime(side, e.id, 'exit1', ev.target.value)}
-                      onBlur={ev => onBlurTime(side, e.id, 'exit1', ev.target.value)}
-                      className="w-full px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg border border-zinc-200 text-[10px] sm:text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
-                      placeholder="--:--"
-                      inputMode="numeric"
-                      maxLength={5}
-                    />
-                  </td>
-                  <td className="px-0.5 sm:px-1 py-1">
-                    <input
-                      value={e.entry2 || ''}
-                      onChange={ev => onEditTime(side, e.id, 'entry2', ev.target.value)}
-                      onBlur={ev => onBlurTime(side, e.id, 'entry2', ev.target.value)}
-                      className="w-full px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg border border-zinc-200 text-[10px] sm:text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
-                      placeholder="--:--"
-                      inputMode="numeric"
-                      maxLength={5}
-                    />
-                  </td>
-                  <td className="px-0.5 sm:px-1 py-1 border-r border-zinc-50">
-                    <input
-                      value={e.exit2 || ''}
-                      onChange={ev => onEditTime(side, e.id, 'exit2', ev.target.value)}
-                      onBlur={ev => onBlurTime(side, e.id, 'exit2', ev.target.value)}
-                      className="w-full px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg border border-zinc-200 text-[10px] sm:text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
-                      placeholder="--:--"
-                      inputMode="numeric"
-                      maxLength={5}
-                    />
-                  </td>
-                  <td className="px-0.5 sm:px-1 py-1">
-                    <input
-                      value={e.entryExtra || ''}
-                      onChange={ev => onEditTime(side, e.id, 'entryExtra', ev.target.value)}
-                      onBlur={ev => onBlurTime(side, e.id, 'entryExtra', ev.target.value)}
-                      className="w-full px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg border border-zinc-200 text-[10px] sm:text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
-                      placeholder="--:--"
-                      inputMode="numeric"
-                      maxLength={5}
-                    />
-                  </td>
-                  <td className="px-0.5 sm:px-1 py-1 border-r border-zinc-50">
-                    <input
-                      value={e.exitExtra || ''}
-                      onChange={ev => onEditTime(side, e.id, 'exitExtra', ev.target.value)}
-                      onBlur={ev => onBlurTime(side, e.id, 'exitExtra', ev.target.value)}
-                      className="w-full px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg border border-zinc-200 text-[10px] sm:text-[11px] font-bold focus:ring-2 focus:ring-zinc-900 outline-none transition-all text-center"
-                      placeholder="--:--"
-                      inputMode="numeric"
-                      maxLength={5}
-                    />
-                  </td>
-                  <td className="px-1 sm:px-2 py-1 text-right bg-zinc-50/20">
-                    {calcTotal(normalizedEntry) ? (
-                      <span className="inline-flex items-center justify-end gap-1.5 font-black text-zinc-900 text-[11px]">
-                        {calcTotal(normalizedEntry)}
-                        {side === 'right' && discountMinutes > 0 && (
-                          <span
-                            className="inline-flex items-center text-amber-600"
-                            title={`Desconto diario aplicado: ${discountLabel}`}
-                            aria-label={`Desconto diario aplicado: ${discountLabel}`}
-                          >
-                            <Info className="w-3.5 h-3.5" />
-                          </span>
-                        )}
-                      </span>
-                    ) : (
-                      <span className="text-zinc-200 text-[11px]">--</span>
-                    )}
-                  </td>
-                </tr>
-              );
-
-              const isEndOfWeek = dayOfWeek === 6;
-              const isLastRow = idx === list.length - 1;
-              const nextEntry = !isLastRow ? list[idx + 1] : null;
-              const nextDate = nextEntry ? parseISO(nextEntry.date) : null;
-              const nextValidDate = !!nextDate && isValid(nextDate);
-              const hasDateDiscontinuity =
-                validDate &&
-                nextValidDate &&
-                differenceInCalendarDays(nextDate as Date, date) !== 1;
-
-              // A card cycle can cross month/year boundaries (e.g. 15/jan -> 16/dez).
-              // In these points we must close the current week block even if it's not Saturday.
-              const shouldCloseByCycleBreak = !!weekStartDay && !isEndOfWeek && hasDateDiscontinuity;
-
-              if (weekStartDay && (isEndOfWeek || isLastRow || shouldCloseByCycleBreak)) {
-                const currentWeekEnd = e.day || '';
-                const currentWeekEndLabel = validDate ? WEEKDAY_ABBR[dayOfWeek] : '';
-                const achieved = weekTotalMinutes >= weeklyTargetMinutes;
-                const missingMinutes = Math.max(0, weeklyTargetMinutes - weekTotalMinutes);
+                if (isMonToSat && weekStartDay === null) {
+                  weekStartDay = e.day || '';
+                  weekStartLabel = WEEKDAY_ABBR[dayOfWeek];
+                }
+                if (isMonToSat) {
+                  weekTotalMinutes += sumEntryWorkedMinutes(normalizedEntry);
+                }
 
                 rows.push(
-                  <tr key={`week-total-${side}-${idx}`} className="bg-zinc-50/70">
-                    <td colSpan={8} className="px-4 py-2.5 text-[10px] border-t border-zinc-100">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="font-bold text-zinc-400 uppercase tracking-wider">
-                          {`${weekStartDay}-${currentWeekEnd} ${weekStartLabel || ''}-${currentWeekEndLabel}`}
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <span className="font-black text-zinc-700">{minutesToHHMM(weekTotalMinutes)}</span>
+                  <tr key={`${side}-${e.day}`} className={cn('border-b border-zinc-100 transition-colors', (isWeekend || !!passiveDayLabel) ? 'bg-zinc-50/40' : 'hover:bg-zinc-50')}>
+                    <td className="w-[58px] border-r border-zinc-100 px-2 py-0.5 align-top">
+                      <div className="flex items-start justify-between gap-1">
+                        <div className="flex flex-col gap-1 leading-none">
+                          <span className="text-[13px] font-black text-zinc-950">{e.day}</span>
+                          <span className="text-[8px] font-extrabold uppercase tracking-[0.08em] text-zinc-500">{dayDisplayName || '--'}</span>
+                          <span className="text-[8px] font-bold uppercase text-zinc-400">{monthDisplayName}</span>
+                        </div>
+                        <div className="mt-0.5 flex flex-col items-center gap-1">
+                          {showAnnotationIcon && (
+                            <div className="group relative">
+                              <span
+                                className="inline-flex h-4.5 w-4.5 items-center justify-center rounded-md border border-amber-200 bg-amber-50 text-amber-600"
+                                title={String(e.annotationText || '').trim()}
+                                aria-label="Anotacoes do dia"
+                              >
+                                <MessageSquareMore className="h-3 w-3" />
+                              </span>
+                              <div className="pointer-events-none absolute left-[calc(100%+0.4rem)] top-0 z-20 hidden min-w-[180px] max-w-[240px] rounded-xl border border-zinc-200 bg-white px-3 py-2 text-left text-[10px] font-medium leading-4 text-zinc-700 shadow-lg group-hover:block">
+                                <div className="mb-1 text-[9px] font-black uppercase tracking-[0.08em] text-zinc-500">Anotacoes</div>
+                                <div className="whitespace-pre-line break-words">{String(e.annotationText || '').trim()}</div>
+                              </div>
+                            </div>
+                          )}
                           {side === 'left' && (
-                            <span className={cn("font-semibold", achieved ? "text-emerald-600" : "text-amber-600")}>
-                              {achieved ? `${Math.round(weeklyTargetMinutes / 60)}h ok` : `faltam ${minutesToHHMM(missingMinutes)}`}
-                            </span>
+                            <button
+                              type="button"
+                              onClick={() => toggleJustification(e.id)}
+                              className={cn(
+                                'inline-flex h-4.5 w-4.5 items-center justify-center rounded-md border transition-colors',
+                                e.isDPAnnotation
+                                  ? 'border-emerald-200 bg-emerald-50 text-emerald-600'
+                                  : 'border-zinc-200 bg-white text-zinc-300 hover:border-zinc-300 hover:text-zinc-500'
+                              )}
+                              title={e.isDPAnnotation ? 'Atraso justificado' : 'Marcar atraso justificado'}
+                              aria-label={e.isDPAnnotation ? 'Atraso justificado' : 'Marcar atraso justificado'}
+                            >
+                              <Clock className="h-3 w-3" />
+                            </button>
                           )}
                         </div>
                       </div>
                     </td>
+                    {renderTimeCell(e, side, 'entry1')}
+                    {renderTimeCell(e, side, 'exit1', true)}
+                    {renderTimeCell(e, side, 'entry2')}
+                    {renderTimeCell(e, side, 'exit2', true)}
+                    {renderTimeCell(e, side, 'entryExtra')}
+                    {renderTimeCell(e, side, 'exitExtra', true)}
+                    <td className="w-[64px] px-2 py-0.5 text-right">
+                      {calcTotal(normalizedEntry) ? (
+                        <span className="inline-flex items-center justify-end gap-1 text-[10px] font-black text-zinc-950">
+                          {calcTotal(normalizedEntry)}
+                          {side === 'right' && discountMinutes > 0 && (
+                            <span
+                              className="inline-flex items-center text-amber-600"
+                              title={`Desconto diario aplicado: ${discountLabel}`}
+                              aria-label={`Desconto diario aplicado: ${discountLabel}`}
+                            >
+                              <Info className="h-3.5 w-3.5" />
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-black text-zinc-300">--</span>
+                      )}
+                    </td>
                   </tr>
                 );
 
-                weekStartDay = null;
-                weekStartLabel = null;
-                weekTotalMinutes = 0;
-              }
-            });
+                const isEndOfWeek = dayOfWeek === 6;
+                const isLastRow = idx === list.length - 1;
+                const nextEntry = !isLastRow ? list[idx + 1] : null;
+                const nextDate = nextEntry ? parseISO(nextEntry.date) : null;
+                const nextValidDate = !!nextDate && isValid(nextDate);
+                const hasDateDiscontinuity =
+                  validDate &&
+                  nextValidDate &&
+                  differenceInCalendarDays(nextDate as Date, date) !== 1;
 
-            return rows;
-          })()}
+                const shouldCloseByCycleBreak = !!weekStartDay && !isEndOfWeek && hasDateDiscontinuity;
+
+                if (weekStartDay && (isEndOfWeek || isLastRow || shouldCloseByCycleBreak)) {
+                  const currentWeekEnd = e.day || '';
+                  const currentWeekEndLabel = validDate ? WEEKDAY_ABBR[dayOfWeek] : '';
+                  const achieved = weekTotalMinutes >= weeklyTargetMinutes;
+                  const missingMinutes = Math.max(0, weeklyTargetMinutes - weekTotalMinutes);
+
+                  rows.push(
+                    <tr key={`week-total-${side}-${idx}`} className="bg-zinc-50">
+                      <td colSpan={8} className="border-t border-zinc-200 px-2.5 py-2 text-[10px]">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-[9px] font-extrabold uppercase tracking-[0.06em] text-zinc-500">
+                            {`${weekStartDay}-${currentWeekEnd} ${weekStartLabel || ''}-${currentWeekEndLabel}`}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black text-zinc-900">{minutesToHHMM(weekTotalMinutes)}</span>
+                            {side === 'left' && (
+                              <span className={cn('text-[10px] font-bold', achieved ? 'text-emerald-600' : 'text-amber-600')}>
+                                {achieved ? `${Math.round(weeklyTargetMinutes / 60)}h ok` : `faltam ${minutesToHHMM(missingMinutes)}`}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+
+                  weekStartDay = null;
+                  weekStartLabel = null;
+                  weekTotalMinutes = 0;
+                }
+              });
+
+              return rows;
+            })()}
           </tbody>
         </table>
       </div>
-      <div className="px-6 py-4 border-t border-zinc-100 flex items-center justify-between text-[10px] bg-zinc-50/30">
-        <button 
+
+      <div className="flex items-center justify-between border-t border-zinc-200 bg-zinc-50/40 px-4 py-3 text-[9px]">
+        <button
           onClick={() => onUploadClick?.(side === 'right')}
-          className="inline-flex items-center gap-1.5 font-bold text-zinc-400 hover:text-zinc-900 transition-colors uppercase tracking-widest"
+          className="inline-flex items-center gap-1.5 font-bold uppercase tracking-widest text-zinc-400 transition-colors hover:text-zinc-900"
         >
-          <Upload className="w-3 h-3"/> Subir imagens
+          <Upload className="h-3 w-3" />
+          Subir imagens
         </button>
-        <span className="text-zinc-400 font-medium italic">Edição manual habilitada</span>
+        <span className="font-medium italic text-zinc-400">Edição manual habilitada</span>
       </div>
     </div>
   );
 
   return (
-    <div className="space-y-6 sm:space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      {/* Header Area (sem a faixa preta) */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 sm:gap-6 bg-white p-4 sm:p-6 md:p-8 rounded-3xl md:rounded-[2rem] border border-zinc-100 shadow-sm">
-        <div className="flex items-center gap-4">
-          {onBack && (
-            <button 
-              onClick={onBack} 
-              className="p-3 bg-zinc-50 hover:bg-zinc-100 text-zinc-600 rounded-2xl transition-all border border-zinc-100"
-            >
-              <ArrowLeft className="w-5 h-5"/>
-            </button>
-          )}
-          <div>
-            <div className="flex items-center gap-2 text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">
-              <Calendar className="w-3 h-3" />
-              Conferência de Registros
-            </div>
-            <div className="text-xl sm:text-2xl font-black text-zinc-900 tracking-tighter italic">Lançamento Consolidado</div>
-            {competenciaPeriodLabel && (
-              <div className="text-[11px] font-semibold text-zinc-500 mt-1">{competenciaPeriodLabel}</div>
+    <div className="animate-in space-y-6 fade-in slide-in-from-bottom-4 duration-500 sm:space-y-8">
+      <div className="rounded-3xl border border-zinc-100 bg-white p-4 shadow-sm sm:p-6 md:rounded-[2rem] md:p-8">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex items-center gap-4">
+            {onBack && (
+              <button
+                onClick={onBack}
+                className="rounded-2xl border border-zinc-100 bg-zinc-50 p-3 text-zinc-600 transition-all hover:bg-zinc-100"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </button>
             )}
+            <div>
+              <div className="mb-1 flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-zinc-400">
+                <Calendar className="h-3 w-3" />
+                Conferência de Registros
+              </div>
+              <div className="text-xl font-black italic tracking-tighter text-zinc-900 sm:text-2xl">Lançamento Consolidado</div>
+              {competenciaPeriodLabel && <div className="mt-1 text-[11px] font-semibold text-zinc-500">{competenciaPeriodLabel}</div>}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between lg:justify-end">
+            <div className="inline-flex w-full rounded-2xl border border-zinc-200 bg-zinc-100 p-1 sm:w-auto">
+              <button
+                type="button"
+                onClick={() => setActiveCardTab('left')}
+                className={cn(
+                  "flex-1 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-[0.12em] transition-all sm:flex-none",
+                  activeCardTab === 'left' ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-800"
+                )}
+              >
+                Cartão Normal
+              </button>
+              <button
+                type="button"
+                onClick={() => hasOvertimeData && setActiveCardTab('right')}
+                className={cn(
+                  "flex-1 rounded-xl px-4 py-2 text-xs font-black uppercase tracking-[0.12em] transition-all sm:flex-none",
+                  activeCardTab === 'right' ? "bg-white text-zinc-900 shadow-sm" : "text-zinc-500 hover:text-zinc-800",
+                  !hasOvertimeData && "cursor-not-allowed opacity-50 hover:text-zinc-500"
+                )}
+                disabled={!hasOvertimeData}
+                title={hasOvertimeData ? 'Ver cartao extra' : 'Nao ha lancamentos no cartao extra'}
+              >
+                Cartão Extra
+              </button>
+            </div>
+
+            <button
+              onClick={commit}
+              disabled={!!disableSave}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-zinc-900 bg-zinc-900 px-5 py-3 text-sm font-bold text-white shadow-lg shadow-zinc-200 transition-all hover:-translate-y-0.5 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0"
+            >
+              <Save className="h-4 w-4" />
+              {disableSave ? 'Carregando mês...' : 'Salvar alterações'}
+            </button>
           </div>
         </div>
-
-        <button 
-          onClick={commit} 
-          disabled={!!disableSave}
-          className="w-full md:w-auto px-5 sm:px-8 py-3.5 sm:py-4 bg-zinc-900 text-white rounded-2xl font-bold flex items-center justify-center gap-3 shadow-xl shadow-zinc-200 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:active:scale-100"
-        >
-          <Save className="w-5 h-5"/> {disableSave ? 'Carregando mês...' : 'Salvar Alterações'}
-        </button>
       </div>
-
-      {/* Grid de Tabelas */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-8">
-        {renderTable(left, 'left')}
-        {renderTable(right, 'right')}
+      <div className="grid grid-cols-1 gap-4 sm:gap-8">
+        {activeCardTab === 'left' ? renderTable(left, 'left') : renderTable(right, 'right')}
       </div>
     </div>
   );
 }
-
-
-
-
-
-
-

@@ -36,9 +36,20 @@ create table if not exists public.app_settings (
   work_end text default '21:00',
   saturday_work_start text default '12:00',
   saturday_work_end text default '16:00',
+  overtime_discount_enabled boolean default true,
+  overtime_discount_threshold_one_hours numeric default 4,
+  overtime_discount_minutes_one integer default 15,
+  overtime_discount_threshold_two_hours numeric default 6,
+  overtime_discount_minutes_two integer default 60,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.app_settings add column if not exists overtime_discount_enabled boolean default true;
+alter table public.app_settings add column if not exists overtime_discount_threshold_one_hours numeric default 4;
+alter table public.app_settings add column if not exists overtime_discount_minutes_one integer default 15;
+alter table public.app_settings add column if not exists overtime_discount_threshold_two_hours numeric default 6;
+alter table public.app_settings add column if not exists overtime_discount_minutes_two integer default 60;
 
 create table if not exists public.references (
   id uuid primary key default gen_random_uuid(),
@@ -63,6 +74,17 @@ create table if not exists public.references (
   unique (user_id, month, year)
 );
 
+create table if not exists public.companies (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  cnpj text not null,
+  name text,
+  settings_json jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, cnpj)
+);
+
 create table if not exists public.reference_entries (
   id uuid primary key default gen_random_uuid(),
   reference_id uuid not null references public.references(id) on delete cascade,
@@ -77,10 +99,13 @@ create table if not exists public.reference_entries (
   exit_extra text,
   total_hours text,
   is_dp_annotation boolean not null default false,
+  annotation_text text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (reference_id, card_type, work_date)
 );
+
+alter table public.reference_entries add column if not exists annotation_text text;
 
 create table if not exists public.banco_horas (
   id uuid primary key default gen_random_uuid(),
@@ -104,6 +129,7 @@ create table if not exists public.simulator_plans (
 );
 
 create index if not exists idx_references_user_month_year on public.references(user_id, year desc, month desc);
+create index if not exists idx_companies_user_cnpj on public.companies(user_id, cnpj);
 create index if not exists idx_reference_entries_reference_type_date on public.reference_entries(reference_id, card_type, work_date);
 create index if not exists idx_banco_horas_reference_date on public.banco_horas(reference_id, date);
 create index if not exists idx_simulator_plans_user_reference on public.simulator_plans(user_id, reference);
@@ -128,6 +154,11 @@ create trigger set_updated_at_references
 before update on public.references
 for each row execute function public.set_updated_at();
 
+drop trigger if exists set_updated_at_companies on public.companies;
+create trigger set_updated_at_companies
+before update on public.companies
+for each row execute function public.set_updated_at();
+
 drop trigger if exists set_updated_at_reference_entries on public.reference_entries;
 create trigger set_updated_at_reference_entries
 before update on public.reference_entries
@@ -145,6 +176,7 @@ for each row execute function public.set_updated_at();
 
 alter table public.app_settings enable row level security;
 alter table public.references enable row level security;
+alter table public.companies enable row level security;
 alter table public.reference_entries enable row level security;
 alter table public.banco_horas enable row level security;
 alter table public.simulator_plans enable row level security;
@@ -157,6 +189,12 @@ with check (auth.uid() = user_id);
 
 drop policy if exists "references_owner_all" on public.references;
 create policy "references_owner_all" on public.references
+for all
+using (auth.uid() = user_id)
+with check (auth.uid() = user_id);
+
+drop policy if exists "companies_owner_all" on public.companies;
+create policy "companies_owner_all" on public.companies
 for all
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);

@@ -14,6 +14,7 @@ export interface TimeEntry {
   exitExtra: string;
   totalHours: string;
   isDPAnnotation?: boolean;
+  annotationText?: string;
   employeeName?: string;
   employeeCode?: string;
   role?: string;
@@ -44,64 +45,218 @@ export interface PontoData {
   backImage?: string;
 }
 
-const SYSTEM_PROMPT = `Voce e um leitor de cartao de ponto brasileiro com foco em precisao.
-Analise a imagem e extraia os dados seguindo as regras abaixo.
+const SYSTEM_PROMPT = `Voce e um extrator de dados de cartao de ponto brasileiro.
+Seu objetivo e ler a imagem e retornar um JSON exato, sem inventar informacoes.
 
-### REGRAS CRITICAS DE ANTI-ALUCINACAO:
-- NUNCA invente informacoes. Se um campo nao estiver legivel, use null ou "".
-- Proibido inventar nome de funcionario.
-- Horarios devem estar em HH:MM. Se ilegivel, use "".
+REGRAS PRINCIPAIS:
+- Prioridade maxima: precisao.
+- Se estiver em duvida, deixe vazio.
+- Nunca invente nome, codigo, horario, data ou texto.
+- Nunca estimar horarios parcialmente legiveis.
+- Nunca completar digitos faltantes por suposicao.
+- Horarios validos devem estar claramente no formato HH:MM.
+- Se nao estiver claramente em HH:MM, retorne "".
+- Preserve exatamente os digitos visiveis do horario.
+- Nao arredonde horario.
+- Nao transponha digitos.
+- Nao troque 23 por 19, 50 por 09, 02 por 00 ou valores parecidos.
+- Se a imagem mostrar 21:02, retorne 21:02.
+- Se a imagem mostrar 23:50, retorne 23:50.
 
-### EXTRACAO DO CABECALHO:
-Extraia do topo do cartao:
+CABECALHO A EXTRAIR:
 - companyName
 - companyCnpj
 - employeeName
 - employeeCode
 - role
 - location
-- month (MM)
-- year (numero)
+- month
+- year
 - cardNumber
 
-### DETECCAO DE TIPO DE CARTAO:
-- Se houver indicacao de "Hora Extras", usar "isOvertimeCard": true.
-- Caso contrario, "isOvertimeCard": false.
+TIPO DE CARTAO:
+- Se houver indicacao clara de "hora extra", "horas extras", "he", "h. extra" ou equivalente, use "isOvertimeCard": true.
+- Caso contrario, use "isOvertimeCard": false.
 - Este campo deve ser booleano.
 
-### EXTRACAO DOS DIAS:
-- O cartao sempre tem 31 linhas (01 a 31).
-- Colunas: manha (entrada/saida), tarde (entrada/saida), extra (entrada/saida).
-- Extraia horarios em HH:MM.
-- Para dia sem marcacao, deixar campos de horario vazios.
-- Ignore colunas de total manual ou colunas auxiliares de HE.
+ESTRUTURA DO CARTAO:
+- O cartao possui sempre 31 linhas, de 01 a 31.
+- Cada linha representa o dia impresso no cartao.
+- O campo principal da linha e "day".
 - Retorne exatamente 31 itens em "entries".
+- Se uma linha estiver vazia, ela ainda precisa existir no array.
 
-### REGRA PARA ANOTACOES MANUAIS (MUITO IMPORTANTE):
-- Nao confundir anotacoes manuscritas/carimbos/observacoes com marcacoes de ponto.
-- Exemplos de anotacao: "falta", "atestado", "folga", "abono", "DSR", "ferias", rubricas, assinaturas, circulos, riscos, somatórios de horas,1h ,2.55 , 3,55.
-- Texto livre, siglas ou observacoes NUNCA devem virar horario.
-- Se houver apenas anotacao no dia e nenhuma marcacao valida, manter todos os horarios como "".
-- Quando identificar anotacao relacionada ao dia, marcar "isDPAnnotation": true nesse item.
-- So preencher campos de horario quando houver valor claramente no formato de marcacao de ponto (HH:MM).
+CAMPOS DE CADA LINHA:
+- day
+- workDate
+- entry1
+- exit1
+- entry2
+- exit2
+- entryExtra
+- exitExtra
+- totalHours
+- isDPAnnotation
+- annotationText
 
-REGRA DE VIRADA DE DIA:
-- Se entrada ocorreu em um dia e saida no dia seguinte, use saida vazia no dia da entrada.
-- Se saida ocorreu no dia atual e a entrada foi no dia anterior, use entrada vazia no dia da saida.
+REGRAS PARA AS MARCACOES:
+- Use apenas marcacoes reais do cartao.
+- Considere somente as colunas de ponto:
+  - manha: entrada e saida
+  - tarde: entrada e saida
+  - extra: entrada e saida
+- Nao usar colunas de total, saldo, banco, observacao, rubrica, somatorio ou campos auxiliares.
+- Nao calcular "totalHours". Sempre retornar "".
+- Se houver apenas parte da marcacao visivel, extraia apenas o que estiver claramente legivel e deixe o restante vazio.
+- Nao inferir virada de dia. Nao inventar entrada/saida do dia anterior ou do dia seguinte.
+- Em muitos cartoes, o numero do dia aparece impresso no inicio da linha, antes do primeiro horario.
+- Esse numero do dia NAO faz parte do horario.
+- Exemplo: em uma linha do dia 06, a leitura "06 21:02 23:50" significa dia 06 com horarios 21:02 e 23:50.
+- Nunca use o numero do dia para formar horario.
+- Horarios impressos em matriz/pontilhado cinza continuam sendo horarios validos se estiverem legiveis.
+- Numeros manuscritos na lateral direita, no rodape ou fora das 6 colunas principais geralmente NAO sao horarios de ponto.
+- Valores como "1,32", "5,11", "6,54", "1.30", "0.38", "19,79" devem ser tratados como anotacao, nunca como horario.
+- Em cartao de horas extras, prefira horarios dentro da area de colunas do cartao; nao use totais manuscritos laterais como entrada/saida.
 
-### FORMATO DE SAIDA:
-Retorne JSON puro com:
-- companyName, companyCnpj, employeeName, employeeCode, role, location, month, year, cardNumber, isOvertimeCard
-- entries: array com objetos contendo:
-  workDate, day, entry1, exit1, entry2, exit2, entryExtra, exitExtra, totalHours, isDPAnnotation
+ANOTACOES MANUAIS:
+- Nao confundir anotacoes manuscritas, carimbos, observacoes ou rabiscos com marcacoes de ponto.
+- Exemplos de anotacao que NAO sao horario:
+  - falta
+  - atestado
+  - folga
+  - abono
+  - dsr
+  - ferias
+  - assinaturas
+  - rubricas
+  - circulos
+  - riscos
+  - somatorios
+  - "1h"
+  - "2,55"
+  - "3,55"
+- Se existir anotacao relacionada ao dia, marque "isDPAnnotation": true.
+- Se houver texto de anotacao legivel relacionado ao dia, preencha "annotationText" com esse texto.
+- Se nao houver texto legivel, use "annotationText": "".
+- Se houver apenas anotacao e nenhuma marcacao valida, todos os horarios daquele dia devem ficar "".
+- Se a palavra manuscrita for apenas "DOMINGO", "domingo", "FERIADO" ou "feriado", nao trate isso como observacao detalhada.
+- Nesses casos, preencha "annotationText" com o proprio rótulo visivel ("DOMINGO" ou "FERIADO") e nao invente texto adicional.
+- Se houver outras anotacoes manuscritas em lapis ou caneta no dia, elas devem ir para "annotationText".
 
-REGRAS ADICIONAIS:
-1. "workDate" deve ser montado com mes/ano de referencia e dia da linha.
-2. Se ciclo > 1, dias maiores que o inicio do ciclo pertencem ao mes anterior da referencia.
-3. "day" deve ser de "01" a "31".
-4. "totalHours" deve vir sempre como "".
-5. Se houver duas imagens, consolidar em uma unica lista de 31 dias.
-6. Validacao final: "entries" precisa ter exatamente 31 elementos.`;
+REGRAS DE DATA:
+- "day" deve ser sempre de "01" a "31".
+- "month" deve vir em MM.
+- "year" deve vir numerico.
+- "workDate" pode ser montado usando o mes/ano de referencia e o dia da linha.
+- Se o ciclo informado for maior que 1, dias maiores que o inicio do ciclo pertencem ao mes anterior da referencia.
+- Se houver duvida sobre a data completa, preserve o "day" correto e monte "workDate" usando a regra do ciclo.
+
+MULTIPLAS IMAGENS:
+- Se houver duas imagens, combine frente e verso em uma unica resposta.
+- O resultado final continua sendo um unico array com 31 linhas.
+- Nao duplicar dias.
+
+SAIDA OBRIGATORIA:
+- Retorne JSON puro, sem markdown, sem comentario, sem explicacao.
+- Estrutura:
+  - companyName
+  - companyCnpj
+  - employeeName
+  - employeeCode
+  - role
+  - location
+  - month
+  - year
+  - cardNumber
+  - isOvertimeCard
+  - entries
+
+EXEMPLO DE FORMATO:
+{
+  "companyName": "",
+  "companyCnpj": "",
+  "employeeName": "",
+  "employeeCode": "",
+  "role": "",
+  "location": "",
+  "month": "03",
+  "year": 2026,
+  "cardNumber": "",
+  "isOvertimeCard": false,
+  "entries": [
+    {
+      "workDate": "2026-03-01",
+      "day": "01",
+      "entry1": "",
+      "exit1": "",
+      "entry2": "",
+      "exit2": "",
+      "entryExtra": "",
+      "exitExtra": "",
+      "totalHours": "",
+      "isDPAnnotation": false,
+      "annotationText": ""
+    },
+    {
+      "workDate": "2026-03-02",
+      "day": "02",
+      "entry1": "12:00",
+      "exit1": "17:00",
+      "entry2": "18:00",
+      "exit2": "21:00",
+      "entryExtra": "",
+      "exitExtra": "",
+      "totalHours": "",
+      "isDPAnnotation": false,
+      "annotationText": ""
+    }
+  ]
+}
+
+IMPORTANTE SOBRE O EXEMPLO:
+- O exemplo acima mostra apenas 2 linhas para ilustrar o formato.
+- Na resposta real, "entries" deve conter exatamente 31 elementos, do dia 01 ao dia 31.
+
+VALIDACAO FINAL ANTES DE RESPONDER:
+- O JSON precisa ser valido.
+- "entries" precisa ter exatamente 31 elementos.
+- Cada elemento precisa ter "day" de 01 a 31.
+- "totalHours" deve ser sempre "".
+- Nenhum horario pode ser inventado.`;
+
+function normalizeAnnotationText(value: unknown): string {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function sanitizePontoData(result: PontoData, forceIsOvertime?: boolean): PontoData {
+  const entries = Array.isArray(result.entries) ? result.entries : [];
+  const sanitizedEntries = entries.map((entry, index) => {
+    const annotationText = normalizeAnnotationText((entry as any)?.annotationText);
+    const normalized: TimeEntry = {
+      ...entry,
+      id: entry?.id || `ocr-${String(entry?.day || index + 1).padStart(2, '0')}`,
+      workDate: String(entry?.workDate || entry?.date || ''),
+      date: String(entry?.date || entry?.workDate || ''),
+      day: String(entry?.day || '').padStart(2, '0'),
+      entry1: String(entry?.entry1 || ''),
+      exit1: String(entry?.exit1 || ''),
+      entry2: String(entry?.entry2 || ''),
+      exit2: String(entry?.exit2 || ''),
+      entryExtra: String(entry?.entryExtra || ''),
+      exitExtra: String(entry?.exitExtra || ''),
+      totalHours: '',
+      isDPAnnotation: !!entry?.isDPAnnotation,
+      annotationText,
+    };
+    return normalized;
+  });
+
+  return {
+    ...result,
+    isOvertimeCard: forceIsOvertime !== undefined ? forceIsOvertime : !!result.isOvertimeCard,
+    entries: sanitizedEntries
+  };
+}
 
 export async function listGeminiModels(apiKey: string): Promise<{ id: string; name: string }[]> {
   if (!apiKey) return [];
@@ -282,7 +437,8 @@ async function parseWithGemini(
                     entryExtra: { type: Type.STRING },
                     exitExtra: { type: Type.STRING },
                     totalHours: { type: Type.STRING },
-                    isDPAnnotation: { type: Type.BOOLEAN }
+                    isDPAnnotation: { type: Type.BOOLEAN },
+                    annotationText: { type: Type.STRING }
                   },
                   required: ["workDate", "day", "entry1", "exit1", "entry2", "exit2", "entryExtra", "exitExtra", "totalHours"],
                 },
@@ -411,10 +567,7 @@ export async function parsePontoImage(
       }
     }
 
-    if (forceIsOvertime !== undefined) {
-      result.isOvertimeCard = forceIsOvertime;
-    }
-    return result;
+    return sanitizePontoData(result, forceIsOvertime);
   } catch (e: any) {
     console.error("Failed to parse images with " + settings.aiProvider, e);
     throw new Error(e.message || "Nao foi possivel processar as imagens do cartao de ponto.");

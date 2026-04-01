@@ -9,6 +9,7 @@ import {
   KeyRound,
   UserPlus,
   ChevronRight,
+  ChevronLeft,
   Menu,
   X,
   DollarSign,
@@ -104,6 +105,7 @@ export default function App() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [monthData, setMonthData] = useState<any>(null);
   const [isMonthLoading, setIsMonthLoading] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [uploadContext, setUploadContext] = useState<{ month: string, isOvertime: boolean } | null>(null);
   const [pendingCardSaveMode, setPendingCardSaveMode] = useState<CardSaveMode | null>(null);
   const [localProjectedByMonth, setLocalProjectedByMonth] = useState<Record<string, any>>({});
@@ -143,6 +145,37 @@ export default function App() {
     return `${match[1]}-${match[2].padStart(2, '0')}`;
   }, []);
 
+  const normalizeReferenceParts = React.useCallback((rawMonth: unknown, rawYear?: unknown) => {
+    const monthText = String(rawMonth || '').trim();
+    let month = '';
+    let year = Number(rawYear || 0);
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(monthText)) {
+      year = Number(monthText.slice(0, 4));
+      month = monthText.slice(5, 7);
+    } else if (/^\d{4}-\d{2}$/.test(monthText)) {
+      year = Number(monthText.slice(0, 4));
+      month = monthText.slice(5, 7);
+    } else if (/^\d{2}\/\d{4}$/.test(monthText)) {
+      month = monthText.slice(0, 2);
+      year = Number(monthText.slice(3, 7));
+    } else if (/^\d{2}$/.test(monthText)) {
+      month = monthText;
+    } else if (/^\d{1,2}$/.test(monthText)) {
+      month = monthText.padStart(2, '0');
+    }
+
+    const monthNumber = Number(month);
+    const yearNumber = Number(year);
+    if (!Number.isInteger(monthNumber) || monthNumber < 1 || monthNumber > 12) return null;
+    if (!Number.isInteger(yearNumber) || yearNumber < 1900) return null;
+
+    return {
+      month: String(monthNumber).padStart(2, '0'),
+      year: yearNumber,
+    };
+  }, []);
+
   const mapRefRowsToEntries = React.useCallback((
     list: any[] = [],
     isOvertimeCard: boolean,
@@ -172,6 +205,7 @@ export default function App() {
       exitExtra: e.exitExtra || '',
       totalHours: e.totalHours || '00:00',
       isDPAnnotation: !!e.isDPAnnotation,
+      annotationText: String((e as any).annotationText || ''),
       isOvertimeCard,
       frontImage: options?.frontImage || undefined,
       backImage: options?.backImage || undefined,
@@ -550,7 +584,8 @@ export default function App() {
         cardNumber: settings?.cardNumber || monthData.cardNumber,
         isOvertimeCard: monthData.isOvertimeCard,
         month: monthData.month,
-        year: monthData.year
+        year: monthData.year,
+        companySettings: monthData.companySettings || settings?.companySettings || null
       };
     }
     const entryMeta = (monthHoursEntries[0] || monthHeEntries[0] || {}) as TimeEntry;
@@ -564,9 +599,21 @@ export default function App() {
       cardNumber: settings?.cardNumber || entryMeta.cardNumber,
       isOvertimeCard: entryMeta.isOvertimeCard,
       month: entryMeta.month,
-      year: entryMeta.year
+      year: entryMeta.year,
+      companySettings: settings?.companySettings || null
     };
   }, [monthHoursEntries, monthHeEntries, settings, monthData]);
+
+  const effectiveMonthSettings = React.useMemo(() => {
+    if (!settings) return settings;
+    const companySettings = (currentMetadata as any)?.companySettings || settings.companySettings || null;
+    return {
+      ...settings,
+      companySettings,
+      companyName: currentMetadata.companyName || settings.companyName,
+      companyCnpj: currentMetadata.companyCnpj || settings.companyCnpj,
+    };
+  }, [settings, currentMetadata]);
 
   const submitAuth = async (mode: AuthMode) => {
     if (apiUnavailable && !useSupabaseAuth) {
@@ -888,18 +935,28 @@ export default function App() {
     frontImage?: string; backImage?: string;
     frontImageHe?: string; backImageHe?: string;
   }, nextView: View = 'dashboard') => {
-    const ref = `${payload.month}${payload.year}`;
+    const normalizedReference = normalizeReferenceParts(payload.month, payload.year);
+    if (!normalizedReference) {
+      toast.error('Competência inválida para salvar.');
+      return;
+    }
+    const safePayload = {
+      ...payload,
+      month: normalizedReference.month,
+      year: normalizedReference.year,
+    };
+    const ref = `${safePayload.month}${safePayload.year}`;
     console.log(`Saving card via POST /api/referencia/${ref}`);
     try {
       let skippedInvalidDates = 0;
       if (useSupabaseData) {
-        const result = await saveReference(ref, payload);
+        const result = await saveReference(ref, safePayload);
         skippedInvalidDates = Number(result?.skippedInvalidDates || 0);
       } else {
         const res = await apiFetch(`/api/referencia/${ref}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(safePayload)
         });
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
@@ -909,7 +966,7 @@ export default function App() {
         console.log('Save response:', data);
       }
 
-      const monthKey = `${payload.year}-${String(payload.month).padStart(2, '0')}`;
+      const monthKey = `${safePayload.year}-${safePayload.month}`;
       await refreshHolerithsAndCache(monthKey);
       setLocalProjectedByMonth((prev) => {
         if (!prev[monthKey]) return prev;
@@ -945,11 +1002,14 @@ export default function App() {
     const sample = newEntries[0] as any;
     const normalizedSelectedMonth = normalizeMonthKey(selectedMonth || '');
     const selected = normalizedSelectedMonth ? normalizedSelectedMonth.split('-') : [];
-    const refYear = selectedMonth ? Number(selected[0]) : (sample.year || Number((sample.workDate || sample.date || '').substring(0, 4)));
-    const refMonth = selectedMonth ? selected[1] : (sample.month || (sample.workDate || sample.date || '').substring(5, 7));
-    if (!refMonth || !refYear) { toast.error('Mês/ano inválido.'); return; }
+    const normalizedReference = selectedMonth
+      ? normalizeReferenceParts(normalizedSelectedMonth)
+      : normalizeReferenceParts(sample.month || (sample.workDate || sample.date || '').substring(5, 7), sample.year || Number((sample.workDate || sample.date || '').substring(0, 4)));
+    if (!normalizedReference) { toast.error('Mês/ano inválido.'); return; }
+    const refYear = normalizedReference.year;
+    const refMonth = normalizedReference.month;
 
-    const monthKey = normalizeMonthKey(`${refYear}-${String(refMonth).padStart(2, '0')}`);
+    const monthKey = normalizeMonthKey(`${refYear}-${refMonth}`);
 
     const normalRows = newEntries.filter(e => !e.isOvertimeCard);
     const overtimeRows = newEntries.filter(e => !!e.isOvertimeCard);
@@ -961,7 +1021,7 @@ export default function App() {
 
     const hasPayloadData = (row: TimeEntry) => {
       const fields = [row.entry1, row.exit1, row.entry2, row.exit2, row.entryExtra, row.exitExtra];
-      return fields.some(v => !!(v || '').toString().trim()) || !!(row as any).isDPAnnotation;
+      return fields.some(v => !!(v || '').toString().trim()) || !!(row as any).isDPAnnotation || !!String((row as any).annotationText || '').trim();
     };
 
     const persistNormal = normalRows.some(hasPayloadData) || !!currentRef?.hasNormalCard;
@@ -973,7 +1033,7 @@ export default function App() {
       entry1: e.entry1 || '', exit1: e.exit1 || '',
       entry2: e.entry2 || '', exit2: e.exit2 || '',
       entryExtra: e.entryExtra || '', exitExtra: e.exitExtra || '',
-      totalHours: e.totalHours || '', isDPAnnotation: !!(e as any).isDPAnnotation
+      totalHours: e.totalHours || '', isDPAnnotation: !!(e as any).isDPAnnotation, annotationText: String((e as any).annotationText || '')
     })) : [];
     const he = persistOvertime ? overtimeRows.map(e => ({
       date: (e as any).workDate || e.date,
@@ -981,7 +1041,7 @@ export default function App() {
       entry1: e.entry1 || '', exit1: e.exit1 || '',
       entry2: e.entry2 || '', exit2: e.exit2 || '',
       entryExtra: e.entryExtra || '', exitExtra: e.exitExtra || '',
-      totalHours: e.totalHours || '', isDPAnnotation: !!(e as any).isDPAnnotation
+      totalHours: e.totalHours || '', isDPAnnotation: !!(e as any).isDPAnnotation, annotationText: String((e as any).annotationText || '')
     })) : [];
 
     if (hours.length === 0 && he.length === 0) {
@@ -1400,56 +1460,87 @@ export default function App() {
       </aside>
 
       {/* Sidebar */}
-      <aside className="hidden md:flex md:relative md:w-72 bg-white border-r border-zinc-100 flex-col">
-        <div className="p-8 hidden md:block">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shadow-lg shadow-zinc-200">
+      <aside className={cn("hidden md:flex md:relative bg-white border-r border-zinc-100 flex-col transition-[width] duration-200", isSidebarCollapsed ? "md:w-24" : "md:w-60")}>
+        <div className={cn("hidden md:block", isSidebarCollapsed ? "p-4" : "p-6")}>
+          <div className={cn("mb-6 flex items-center", isSidebarCollapsed ? "justify-center" : "gap-3")}>
+            <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shadow-lg shadow-zinc-200 shrink-0">
               <PlusCircle className="w-6 h-6 text-white" />
             </div>
-            <span className="font-black text-2xl tracking-tighter">PontoSmart</span>
+            {!isSidebarCollapsed && <span className="font-black text-2xl tracking-tighter">PontoSmart</span>}
           </div>
+          <button
+            type="button"
+            onClick={() => setIsSidebarCollapsed((v) => !v)}
+            className={cn(
+              "group relative flex h-11 items-center justify-center overflow-hidden rounded-2xl border border-zinc-200/80 bg-white text-zinc-500 shadow-sm transition-all hover:-translate-y-0.5 hover:border-zinc-300 hover:text-zinc-900 hover:shadow-md",
+              isSidebarCollapsed ? "mx-auto w-11" : "w-11"
+            )}
+            title={isSidebarCollapsed ? "Expandir menu" : "Recolher menu"}
+            aria-label={isSidebarCollapsed ? "Expandir menu lateral" : "Recolher menu lateral"}
+          >
+            <div className="absolute inset-0 bg-gradient-to-br from-zinc-100 via-white to-zinc-50 opacity-0 transition-opacity group-hover:opacity-100" />
+            <div className="relative flex items-center justify-center">
+              {isSidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+            </div>
+          </button>
         </div>
 
-        <nav className="flex-1 px-4 space-y-2">
+        <nav className={cn("flex-1 space-y-2", isSidebarCollapsed ? "px-3" : "px-4")}>
           {navItems.map(item => (
             <button
               key={item.id}
               onClick={() => { setView(item.id as View); }}
+              title={item.label}
               className={cn(
-                "w-full flex items-center gap-3 px-4 py-4 rounded-2xl font-bold transition-all",
+                "w-full flex items-center rounded-2xl font-bold transition-all",
+                isSidebarCollapsed ? "justify-center px-2 py-3.5" : "gap-3 px-4 py-4",
                 view === item.id 
                   ? "bg-zinc-900 text-white shadow-xl shadow-zinc-200" 
                   : "text-zinc-400 hover:text-zinc-900 hover:bg-zinc-50"
               )}
             >
-              <item.icon className="w-5 h-5" />
-              {item.label}
-              {view === item.id && <ChevronRight className="w-4 h-4 ml-auto opacity-50" />}
+              <item.icon className="w-5 h-5 shrink-0" />
+              {!isSidebarCollapsed && (
+                <>
+                  <span className="truncate">{item.label}</span>
+                  {view === item.id && <ChevronRight className="w-4 h-4 ml-auto opacity-50" />}
+                </>
+              )}
             </button>
           ))}
         </nav>
 
-        <div className="p-6 border-t border-zinc-50">
-          <div className="mb-3 px-2">
-            <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">E-mail</div>
-            <div className="text-sm font-extrabold text-zinc-900 truncate">
-              {authUser.displayName || authUser.email}
+        <div className={cn("border-t border-zinc-50", isSidebarCollapsed ? "p-3" : "p-6")}>
+          {!isSidebarCollapsed && (
+            <div className="mb-3 px-2">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">E-mail</div>
+              <div className="text-sm font-extrabold text-zinc-900 truncate">
+                {authUser.displayName || authUser.email}
+              </div>
+              <div className="text-[11px] text-zinc-500 truncate">{authUser.email}</div>
             </div>
-            <div className="text-[11px] text-zinc-500 truncate">{authUser.email}</div>
-          </div>
+          )}
           <button
             onClick={logout}
-            className="w-full flex items-center gap-3 px-4 py-3 rounded-2xl font-bold text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-all mb-2"
+            title="Sair da Conta"
+            className={cn(
+              "w-full flex items-center rounded-2xl font-bold text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900 transition-all mb-2",
+              isSidebarCollapsed ? "justify-center px-2 py-3" : "gap-3 px-4 py-3"
+            )}
           >
             <LogOut className="w-5 h-5" />
-            Sair da Conta
+            {!isSidebarCollapsed && 'Sair da Conta'}
           </button>
           <button 
             onClick={clearData}
-            className="w-full flex items-center gap-3 px-4 py-4 rounded-2xl font-bold text-red-400 hover:bg-red-50 hover:text-red-600 transition-all"
+            title="Limpar Dados"
+            className={cn(
+              "w-full flex items-center rounded-2xl font-bold text-red-400 hover:bg-red-50 hover:text-red-600 transition-all",
+              isSidebarCollapsed ? "justify-center px-2 py-3" : "gap-3 px-4 py-4"
+            )}
           >
             <X className="w-5 h-5" />
-            Limpar Dados
+            {!isSidebarCollapsed && 'Limpar Dados'}
           </button>
         </div>
       </aside>
@@ -1543,7 +1634,7 @@ export default function App() {
                     entries={filteredEntries}
                     normalEntries={monthHoursEntries}
                     overtimeEntries={monthHeEntries}
-                    settings={settings!}
+                    settings={effectiveMonthSettings!}
                     month={selectedMonth}
                     onSaveEntries={saveEntries}
                     disableSave={isMonthLoading}
@@ -1571,7 +1662,7 @@ export default function App() {
                     entries={filteredEntries}
                     normalEntries={monthHoursEntries}
                     overtimeEntries={monthHeEntries}
-                    settings={settings!}
+                    settings={effectiveMonthSettings!}
                     metadata={currentMetadata}
                     selectedMonth={selectedMonth}
                   />
@@ -1602,7 +1693,7 @@ export default function App() {
             {view === 'card' && <DualCardView 
               entries={filteredEntries} 
               month={selectedMonth}
-              settings={settings!}
+              settings={effectiveMonthSettings!}
               onSave={saveEntries}
               disableSave={isMonthLoading}
               onBack={() => setView('card-list')}
@@ -1685,7 +1776,8 @@ export default function App() {
                     entryExtra: r.entryExtra || '',
                     exitExtra: r.exitExtra || '',
                     totalHours: r.totalHours || '',
-                    isDPAnnotation: !!r.isDPAnnotation
+                    isDPAnnotation: !!r.isDPAnnotation,
+                    annotationText: (r as any).annotationText || ''
                   })),
                   he: projected.he.map((r) => ({
                     date: r.date,
@@ -1697,7 +1789,8 @@ export default function App() {
                     entryExtra: r.entryExtra || '',
                     exitExtra: r.exitExtra || '',
                     totalHours: r.totalHours || '',
-                    isDPAnnotation: !!r.isDPAnnotation
+                    isDPAnnotation: !!r.isDPAnnotation,
+                    annotationText: (r as any).annotationText || ''
                   })),
                   frontImage: null,
                   backImage: null,
@@ -1762,10 +1855,15 @@ export default function App() {
                 }
                 
                 // Parse refMonth from OCR metadata (returned as "MM") or from first entry date
-                const rawMonth = metadata.month || (newEntries[0].workDate || newEntries[0].date || '').substring(5, 7);
-                // Normalize: if it has '/', take only the first part (legacy "MM/YY" format fallback)
-                const refMonth = rawMonth.includes('/') ? rawMonth.split('/')[0].padStart(2, '0') : String(rawMonth).padStart(2, '0');
-                const refYear = metadata.year || Number((newEntries[0].workDate || newEntries[0].date || '').substring(0, 4));
+                const normalizedReference = normalizeReferenceParts(
+                  metadata.month || (newEntries[0].workDate || newEntries[0].date || '').substring(5, 7),
+                  metadata.year || Number((newEntries[0].workDate || newEntries[0].date || '').substring(0, 4))
+                );
+                if (!normalizedReference) {
+                  throw new Error('Competência inválida retornada pelo OCR.');
+                }
+                const refMonth = normalizedReference.month;
+                const refYear = normalizedReference.year;
                 const referenceKey = `${refYear}-${refMonth}`;
                 const cycleStart = settings?.cycleStartDay || 15;
 
@@ -1830,7 +1928,7 @@ export default function App() {
                       entry1: src?.entry1 || '', exit1: src?.exit1 || '',
                       entry2: src?.entry2 || '', exit2: src?.exit2 || '',
                       entryExtra: src?.entryExtra || '', exitExtra: src?.exitExtra || '',
-                      totalHours: '', isDPAnnotation: !!(src?.isDPAnnotation)
+                      totalHours: '', isDPAnnotation: !!(src?.isDPAnnotation), annotationText: src?.annotationText || ''
                     });
                   }
                   return out;
@@ -1842,7 +1940,7 @@ export default function App() {
                 ];
 
                 const hasCapturedData = (row: any) =>
-                  !!row && (timeFields.some((f) => !!(row[f] || '').toString().trim()) || !!row.isDPAnnotation);
+                  !!row && (timeFields.some((f) => !!(row[f] || '').toString().trim()) || !!row.isDPAnnotation || !!String(row.annotationText || '').trim());
 
                 // Regra de negocio: preservar dados existentes e atualizar apenas dados capturados pela IA.
                 const mergeCardRows = (existingRows: any[], incomingRows: TimeEntry[]) => {
@@ -1875,6 +1973,7 @@ export default function App() {
                       if (value !== '') merged[f] = value;
                     }
                     if (incoming.isDPAnnotation) merged.isDPAnnotation = true;
+                    if ((incoming.annotationText || '').toString().trim() !== '') merged.annotationText = incoming.annotationText;
                     return merged;
                   });
                 };

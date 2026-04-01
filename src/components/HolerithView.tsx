@@ -112,7 +112,11 @@ export default function HolerithView({
       dependentes: settings.dependentes || 0,
       adiantamentoPercent: settings.adiantamentoPercent || 45,
       adiantamentoPago: settings.adiantamentoIR ? { bruto: 0, irRetido: settings.adiantamentoIR } : null,
-      cycleStartDay: settings.cycleStartDay || 15
+      cycleStartDay: settings.cycleStartDay || 15,
+      rubrics: settings.companySettings?.rubrics,
+      companyConfig: settings.companySettings?.config,
+      overtimeBuckets: calc.overtimeBuckets,
+      discountBuckets: calc.discountBuckets,
     });
 
     return { calc, payroll, atrasoValor, month, year, normals, overs };
@@ -130,18 +134,14 @@ export default function HolerithView({
     ? format(parseISO(`${selectedMonth}-01`), 'MMMM/yyyy', { locale: ptBR })
     : `${String(data.month).padStart(2, '0')}/${data.year}`;
 
-  const proventos = [
-    { code: '011', desc: 'SALARIO FIXO', hours: settings.monthlyHours || 220, value: data.payroll.valores.salarioBase },
-    { code: '105', desc: 'HORA EXTRA 50%', hours: data.calc.grandTotal50, value: data.payroll.valores.v50 },
-    { code: '109', desc: 'HORA EXTRA 75%', hours: data.calc.grandTotal75, value: data.payroll.valores.v75 },
-    { code: '203', desc: 'HORA EXTRA 100%', hours: data.calc.grandTotal100, value: data.payroll.valores.v100 },
-    { code: '359', desc: 'HORA EXTRA 125%', hours: data.calc.grandTotal125, value: data.payroll.valores.v125 },
-    { code: '394', desc: 'DSR S/ HORAS EXTRAS', hours: null, value: data.payroll.valores.valorDSR }
-  ].filter((r) => r.value > 0);
+  const proventos = (data.payroll.lines || [])
+    .filter((row: any) => row.amount > 0)
+    .map((row: any) => ({ code: row.code, desc: row.description, hours: row.reference, value: row.amount }));
 
   const descontos = [
-    { code: '514', desc: 'DESCONTO DE ATRASO', hours: (data.atrasoValor / (data.payroll.valores.valorHora || 1)), value: data.atrasoValor },
-    { code: '531', desc: 'DESCONTO D.S.R.', hours: null, value: data.payroll.valores.descontoDSRAtraso || 0 },
+    ...(data.payroll.lines || [])
+      .filter((row: any) => row.amount < 0)
+      .map((row: any) => ({ code: row.code, desc: row.description, hours: row.reference, value: Math.abs(row.amount) })),
     { code: '535', desc: 'ADIANTAMENTO', hours: null, value: data.payroll.valores.adiantamentoBruto },
     { code: '987', desc: 'INSS', hours: null, value: data.payroll.valores.inss },
     { code: '989', desc: 'IRF S/ SALARIO', hours: null, value: data.payroll.valores.irRetidoNoFechamento },

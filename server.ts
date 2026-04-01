@@ -146,7 +146,12 @@ db.exec(`
     lunchEnd            TEXT DEFAULT '18:00',
     workEnd             TEXT DEFAULT '21:00',
     saturdayWorkStart   TEXT DEFAULT '12:00',
-    saturdayWorkEnd     TEXT DEFAULT '16:00'
+    saturdayWorkEnd     TEXT DEFAULT '16:00',
+    overtimeDiscountEnabled INTEGER DEFAULT 1,
+    overtimeDiscountThresholdOneHours REAL DEFAULT 4,
+    overtimeDiscountMinutesOne INTEGER DEFAULT 15,
+    overtimeDiscountThresholdTwoHours REAL DEFAULT 6,
+    overtimeDiscountMinutesTwo INTEGER DEFAULT 60
   );
 
   CREATE TABLE IF NOT EXISTS users (
@@ -225,6 +230,11 @@ const requiredSettings = [
   ['workEnd', "TEXT DEFAULT '21:00'"],
   ['saturdayWorkStart', "TEXT DEFAULT '12:00'"],
   ['saturdayWorkEnd', "TEXT DEFAULT '16:00'"],
+  ['overtimeDiscountEnabled', "INTEGER DEFAULT 1"],
+  ['overtimeDiscountThresholdOneHours', "REAL DEFAULT 4"],
+  ['overtimeDiscountMinutesOne', "INTEGER DEFAULT 15"],
+  ['overtimeDiscountThresholdTwoHours', "REAL DEFAULT 6"],
+  ['overtimeDiscountMinutesTwo', "INTEGER DEFAULT 60"],
   ['defaultEmployeeId', "INTEGER REFERENCES employees(id) ON DELETE SET NULL"],
   ['defaultCompanyId', "INTEGER REFERENCES companies(id) ON DELETE SET NULL"]
 ];
@@ -312,8 +322,13 @@ db.exec(`
 
 // Initial data insertion after migrations
 db.prepare(`
-  INSERT OR IGNORE INTO settings (id, baseSalary, monthlyHours, dailyJourney, weeklyLimit, nightCutoff, percent50, percent100, percentNight, aiProvider, geminiModel)
-  VALUES (1, 2500, 220, 8, 3, '22:00', 50, 100, 25, 'gemini', 'gemini-3-flash-preview')
+  INSERT OR IGNORE INTO settings (
+    id, baseSalary, monthlyHours, dailyJourney, weeklyLimit, nightCutoff,
+    percent50, percent100, percentNight, aiProvider, geminiModel,
+    overtimeDiscountEnabled, overtimeDiscountThresholdOneHours, overtimeDiscountMinutesOne,
+    overtimeDiscountThresholdTwoHours, overtimeDiscountMinutesTwo
+  )
+  VALUES (1, 2500, 220, 8, 3, '22:00', 50, 100, 25, 'gemini', 'gemini-3-flash-preview', 1, 4, 15, 6, 60)
 `).run();
 
 const SESSION_COOKIE_NAME = "smart_point_session";
@@ -372,7 +387,9 @@ function ensureSettingsForUser(userId: number) {
       aiProvider, geminiModel,
       dependentes, adiantamentoBruto, adiantamentoIR, adiantamentoPercent,
       saturdayCompensation, cycleStartDay, compDays,
-      workStart, lunchStart, lunchEnd, workEnd, saturdayWorkStart, saturdayWorkEnd
+      workStart, lunchStart, lunchEnd, workEnd, saturdayWorkStart, saturdayWorkEnd,
+      overtimeDiscountEnabled, overtimeDiscountThresholdOneHours, overtimeDiscountMinutesOne,
+      overtimeDiscountThresholdTwoHours, overtimeDiscountMinutesTwo
     )
     VALUES (
       ?,
@@ -381,7 +398,8 @@ function ensureSettingsForUser(userId: number) {
       'gemini', 'gemini-3-flash-preview',
       0, 0, 0, 40,
       0, 15, '1,2,3,4',
-      '12:00', '17:00', '18:00', '21:00', '12:00', '16:00'
+      '12:00', '17:00', '18:00', '21:00', '12:00', '16:00',
+      1, 4, 15, 6, 60
     )
   `).run(userId);
 }
@@ -1227,6 +1245,8 @@ async function startServer() {
       employeeName, employeeCode, role, location, companyName, companyCnpj, cardNumber,
       dependentes, adiantamentoPercent, adiantamentoIR, saturdayCompensation, cycleStartDay, compDays,
       workStart, lunchStart, lunchEnd, workEnd, saturdayWorkStart, saturdayWorkEnd,
+      overtimeDiscountEnabled, overtimeDiscountThresholdOneHours, overtimeDiscountMinutesOne,
+      overtimeDiscountThresholdTwoHours, overtimeDiscountMinutesTwo,
       defaultEmployeeId, defaultCompanyId
     } = req.body;
     const current: any = db.prepare("SELECT defaultEmployeeId, defaultCompanyId FROM settings WHERE id = ?").get(userId);
@@ -1252,6 +1272,8 @@ async function startServer() {
         employeeName = ?, employeeCode = ?, role = ?, location = ?, companyName = ?, companyCnpj = ?, cardNumber = ?,
         dependentes = ?, adiantamentoPercent = ?, adiantamentoIR = ?, saturdayCompensation = ?, cycleStartDay = ?, compDays = ?,
         workStart = ?, lunchStart = ?, lunchEnd = ?, workEnd = ?, saturdayWorkStart = ?, saturdayWorkEnd = ?,
+        overtimeDiscountEnabled = ?, overtimeDiscountThresholdOneHours = ?, overtimeDiscountMinutesOne = ?,
+        overtimeDiscountThresholdTwoHours = ?, overtimeDiscountMinutesTwo = ?,
         defaultEmployeeId = ?, defaultCompanyId = ?
       WHERE id = ?
     `).run(
@@ -1262,6 +1284,8 @@ async function startServer() {
       dependentes || 0, adiantamentoPercent || 0, adiantamentoIR || 0, saturdayCompensation ? 1 : 0, cycleStartDay || 15, compDays || '1,2,3,4',
       workStart || '12:00', lunchStart || '17:00', lunchEnd || '18:00', workEnd || '21:00',
       saturdayWorkStart || '12:00', saturdayWorkEnd || '16:00',
+      overtimeDiscountEnabled ? 1 : 0, Number(overtimeDiscountThresholdOneHours || 4), Number(overtimeDiscountMinutesOne || 15),
+      Number(overtimeDiscountThresholdTwoHours || 6), Number(overtimeDiscountMinutesTwo || 60),
       safeDefaultEmployeeId, safeDefaultCompanyId,
       userId
     );
@@ -1585,7 +1609,7 @@ async function startServer() {
               exit2: pick(row.exit2, existing?.exit2),
               entryExtra: pick(row.entryExtra, existing?.entryExtra),
               exitExtra: pick(row.exitExtra, existing?.exitExtra),
-              notes: pick(row.notes, existing?.notes),
+              notes: pick(row.annotationText ?? row.notes, existing?.notes),
               isDPAnnotation: typeof row?.isDPAnnotation === 'boolean'
                 ? (row.isDPAnnotation ? 1 : 0)
                 : (existing?.isDPAnnotation ? 1 : 0),
@@ -1710,14 +1734,15 @@ async function startServer() {
           entryExtra: src?.entryExtra || "",
           exitExtra: src?.exitExtra || "",
           totalHours: src?.totalHours || "",
-          isDPAnnotation: !!src?.isDPAnnotation
+          isDPAnnotation: !!src?.isDPAnnotation,
+          annotationText: src?.notes || ""
         });
       }
       return out;
     };
 
     const hasAnyContent = (row: any) => {
-      const fields = [row?.entry1, row?.exit1, row?.entry2, row?.exit2, row?.entryExtra, row?.exitExtra, row?.totalHours];
+      const fields = [row?.entry1, row?.exit1, row?.entry2, row?.exit2, row?.entryExtra, row?.exitExtra, row?.totalHours, row?.notes, row?.annotationText];
       return fields.some(v => (v ?? '').toString().trim() !== '') || !!row?.isDPAnnotation;
     };
 

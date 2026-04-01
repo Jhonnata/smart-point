@@ -19,6 +19,7 @@ interface CardRow {
   exitExtra: string;
   totalHours: string;
   isDPAnnotation?: boolean;
+  annotationText?: string;
 }
 
 type RateType = '50' | '75' | '100' | '125';
@@ -66,7 +67,8 @@ function blankRow(day: number, date: string): CardRow {
     exit2: '',
     entryExtra: '',
     exitExtra: '',
-    totalHours: ''
+    totalHours: '',
+    annotationText: ''
   };
 }
 

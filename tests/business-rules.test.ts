@@ -10,6 +10,7 @@ import {
   type TimeEntry,
 } from '../src/lib/calculations.ts';
 import { buildProjectedCardFromHolerith } from '../src/lib/holerithProjection.ts';
+import { calcularHoleriteCompleto } from '../src/lib/payroll.ts';
 
 function createSettings(overrides: Partial<Settings> = {}): Settings {
   return {
@@ -32,6 +33,11 @@ function createSettings(overrides: Partial<Settings> = {}): Settings {
     workEnd: '21:00',
     saturdayWorkStart: '12:00',
     saturdayWorkEnd: '16:00',
+    overtimeDiscountEnabled: true,
+    overtimeDiscountThresholdOneHours: 4,
+    overtimeDiscountMinutesOne: 15,
+    overtimeDiscountThresholdTwoHours: 6,
+    overtimeDiscountMinutesTwo: 60,
     ...overrides,
   };
 }
@@ -57,14 +63,22 @@ function createEntry(params: {
     exitExtra: '',
     totalHours: '',
     isOvertimeCard: !!params.isOvertimeCard,
+    annotationText: '',
   };
 }
 
-test('desconto diario de HE respeita os limiares >4h e >6h', () => {
-  assert.equal(resolveDailyOvertimeDiscountMinutes(4 * 60), 0);
-  assert.equal(resolveDailyOvertimeDiscountMinutes(4 * 60 + 1), 15);
-  assert.equal(resolveDailyOvertimeDiscountMinutes(6 * 60), 15);
-  assert.equal(resolveDailyOvertimeDiscountMinutes(6 * 60 + 1), 60);
+test('desconto diario de HE usa as faixas configuradas e prioriza a maior', () => {
+  const settings = createSettings();
+  assert.equal(resolveDailyOvertimeDiscountMinutes(3 * 60 + 59, settings), 0);
+  assert.equal(resolveDailyOvertimeDiscountMinutes(4 * 60, settings), 15);
+  assert.equal(resolveDailyOvertimeDiscountMinutes(5 * 60, settings), 15);
+  assert.equal(resolveDailyOvertimeDiscountMinutes(6 * 60, settings), 60);
+  assert.equal(resolveDailyOvertimeDiscountMinutes(5 * 60 + 56, settings), 60);
+});
+
+test('desconto diario de HE pode ser desativado nas configuracoes', () => {
+  const settings = createSettings({ overtimeDiscountEnabled: false });
+  assert.equal(resolveDailyOvertimeDiscountMinutes(8 * 60, settings), 0);
 });
 
 test('compensacao de sabado adiciona +1h apenas nos dias configurados e zera o sabado', () => {
@@ -190,4 +204,189 @@ test('a projecao respeita jornada compensada ate 22h em Seg-Qui e 21h na Sexta',
   assert.equal(monday?.exit2, '22:00');
   assert.equal(thursday?.exit2, '22:00');
   assert.equal(friday?.exit2, '21:00');
+});
+
+test('taxas noturnas usam multiplicacao composta no motor e na folha', () => {
+  const settings = createSettings({ baseSalary: 2200, monthlyHours: 220, percent50: 50, percent100: 100, percentNight: 25 });
+  const result = calculateOvertime([], settings);
+  assert.ok(result);
+  assert.equal(result.rate50, 15);
+  assert.equal(result.rate75, 18.75);
+  assert.equal(result.rate100, 20);
+  assert.equal(result.rate125, 25);
+
+  const payroll = calcularHoleriteCompleto({
+    salarioBase: 2200,
+    horasMensais: 220,
+    he50: 1,
+    he75: 1,
+    he100: 1,
+    he125: 1,
+    perc50: 50,
+    perc100: 100,
+    percNight: 25,
+    mes: 3,
+    ano: 2026,
+    cycleStartDay: 16,
+  });
+  assert.equal(payroll.valores.rate75, 18.75);
+  assert.equal(payroll.valores.rate125, 25);
+  assert.ok(payroll.valores.dsrSobreHeDiurna >= 0);
+  assert.ok(payroll.valores.dsrSobreHeNoturna >= 0);
+});
+
+test('limite mensal de 15h por faixa faz transbordo da 50/75 para 100/125', () => {
+  const settings = createSettings({
+    weeklyLimit: 99,
+    saturdayCompensation: false,
+    companySettings: {
+      cnpj: '00000000000000',
+      name: 'Empresa Teste',
+      rubrics: {
+        SALARIO_FIXO: { code: '', label: '' },
+        HE_50: { code: '', label: '' },
+        HE_75: { code: '', label: '' },
+        HE_100: { code: '', label: '' },
+        HE_125: { code: '', label: '' },
+        ADIC_NOT: { code: '', label: '' },
+        DSR_HE: { code: '', label: '' },
+        DSR_NOT: { code: '', label: '' },
+        ATRASO: { code: '', label: '' },
+        DSR_ATRASO: { code: '', label: '' },
+      },
+      config: {
+        monthlyLimitHE: 900,
+      },
+    },
+  });
+  const entries: TimeEntry[] = [];
+
+  for (let day = 2; day <= 23; day++) {
+    if ([7, 8, 14, 15, 21, 22].includes(day)) continue;
+    entries.push(createEntry({
+      id: `d${day}`,
+      date: `2026-03-${String(day).padStart(2, '0')}`,
+      start: '21:00',
+      end: '23:00',
+      isOvertimeCard: true,
+    }));
+  }
+
+  const result = calculateOvertime(entries, settings);
+  assert.ok(result);
+  assert.equal(result.grandTotal50Minutes, 900);
+  assert.equal(result.grandTotal75Minutes, 900);
+  assert.equal(result.grandTotal100Minutes, 60);
+  assert.equal(result.grandTotal125Minutes, 60);
+});
+
+test('anotacao ABONADO ignora o dia e anotacao BCO manda o tempo para banco', () => {
+  const settings = createSettings({ weeklyLimit: 3, saturdayCompensation: false });
+  const abonado: TimeEntry = {
+    ...createEntry({
+      id: 'abonado',
+      date: '2026-03-02',
+      start: '21:00',
+      end: '23:00',
+      isOvertimeCard: true,
+    }),
+    annotationText: 'ABONADO',
+  };
+  const bco: TimeEntry = {
+    ...createEntry({
+      id: 'bco',
+      date: '2026-03-03',
+      start: '21:00',
+      end: '23:00',
+      isOvertimeCard: true,
+    }),
+    annotationText: 'BCO',
+  };
+
+  const result = calculateOvertime([abonado, bco], settings);
+  assert.ok(result);
+  assert.equal(result.grandTotal50Minutes, 0);
+  assert.equal(result.grandTotal75Minutes, 0);
+  assert.equal(result.grandTotal100Minutes, 0);
+  assert.equal(result.grandTotal125Minutes, 0);
+  assert.equal(result.grandTotalBancoHoras, 120);
+});
+
+test('empresa com HE 60 sem faixa de HE 100 contabiliza tudo na rubrica configurada', () => {
+  const settings = createSettings({
+    weeklyLimit: 0,
+    percentNight: 25,
+    companySettings: {
+      cnpj: '11111111111111',
+      name: 'Empresa HE60',
+      rubrics: {
+        SALARIO_FIXO: { code: '0116', label: 'Salario Fixo' },
+        HE_60: { code: '2060', label: 'Hora Extra 60%' },
+        HE_85: { code: '2085', label: 'Hora Extra 85%' },
+        ADIC_NOT: { code: '1082', label: 'Adicional Noturno' },
+        DSR_HE: { code: '3948', label: 'DSR HE' },
+        DSR_NOT: { code: '3930', label: 'DSR Noturno' },
+        ATRASO: { code: '5142', label: 'Atrasos' },
+        DSR_ATRASO: { code: '5312', label: 'DSR Atraso' },
+      },
+      config: {
+        overtimeRules: [
+          {
+            id: 'he60-day',
+            label: 'HE 60 Diurna',
+            rubricKey: 'HE_60',
+            multiplier: 1.6,
+            period: 'day',
+            dayType: 'weekday',
+            priority: 1,
+          },
+          {
+            id: 'he85-night',
+            label: 'HE 85 Noturna',
+            rubricKey: 'HE_85',
+            multiplier: 2.0,
+            period: 'night',
+            dayType: 'weekday',
+            priority: 2,
+          },
+        ],
+      },
+    },
+  });
+
+  const result = calculateOvertime([
+    createEntry({
+      id: 'he60',
+      date: '2026-03-02',
+      start: '21:00',
+      end: '23:00',
+      isOvertimeCard: true,
+    }),
+  ], settings);
+
+  assert.ok(result);
+  assert.equal(result.overtimeBuckets.length, 2);
+  assert.equal(result.overtimeBuckets.find((bucket) => bucket.rubricKey === 'HE_60')?.minutes, 60);
+  assert.equal(result.overtimeBuckets.find((bucket) => bucket.rubricKey === 'HE_85')?.minutes, 60);
+
+  const payroll = calcularHoleriteCompleto({
+    salarioBase: 2200,
+    horasMensais: 220,
+    he50: 0,
+    he75: 0,
+    he100: 0,
+    he125: 0,
+    perc50: 50,
+    perc100: 100,
+    percNight: 25,
+    mes: 3,
+    ano: 2026,
+    rubrics: settings.companySettings?.rubrics,
+    companyConfig: settings.companySettings?.config,
+    overtimeBuckets: result.overtimeBuckets,
+  });
+
+  assert.ok(payroll.lines.some((line) => line.code === '2060'));
+  assert.ok(payroll.lines.some((line) => line.code === '2085'));
+  assert.equal(payroll.lines.some((line) => line.description === 'Hora Extra 100%'), false);
 });

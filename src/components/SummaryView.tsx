@@ -34,6 +34,7 @@ const hoursToMinutes = (hours: number) => Math.max(0, Math.round((Number.isFinit
 export default function SummaryView({ entries, normalEntries, overtimeEntries, settings, month, onSaveEntries, onUploadClick, disableSave }: Props) {
   const [activeView, setActiveView] = React.useState<'financeiro' | 'extras' | 'simulador' | 'lancamentos'>('financeiro');
   const [showDetails, setShowDetails] = React.useState(false);
+  const cardEntries = React.useMemo(() => [...(normalEntries || []), ...(overtimeEntries || [])], [normalEntries, overtimeEntries]);
 
   const results = React.useMemo(() => {
     console.log("[DEBUG] SummaryView: entries=", entries?.length, "settings=", !!settings);
@@ -132,7 +133,11 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
         dependentes: settings.dependentes || 0,
         adiantamentoPercent: settings.adiantamentoPercent || 45,
         adiantamentoPago: settings.adiantamentoIR ? { bruto: 0, irRetido: settings.adiantamentoIR } : null,
-        cycleStartDay: settings.cycleStartDay || 15
+        cycleStartDay: settings.cycleStartDay || 15,
+        rubrics: settings.companySettings?.rubrics,
+        companyConfig: settings.companySettings?.config,
+        overtimeBuckets: res.overtimeBuckets,
+        discountBuckets: res.discountBuckets,
       });
 
       return { ...res, payroll, totalAtrasoValue, totalAtrasoMinutes, dailyDetails };
@@ -551,7 +556,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
         />
       ) : (
         <DualCardView
-          entries={entries}
+          entries={cardEntries.length > 0 ? cardEntries : entries}
           month={month}
           settings={settings}
           onSave={onSaveEntries}

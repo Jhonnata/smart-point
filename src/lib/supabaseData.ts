@@ -1,4 +1,14 @@
-import type { Settings } from './calculations';
+import type {
+  CompanyCalculationConfig,
+  CompanyDailyOvertimeDiscountRule,
+  CompanyOvertimeRule,
+  CompanyRubricEntry,
+  CompanyRubricKey,
+  CompanyRubricMap,
+  CompanySettingsProfile,
+  Settings
+} from './calculations';
+import { buildSuggestedCompanyRubrics, buildSuggestedDailyOvertimeDiscountRules, buildSuggestedOvertimeRules } from './calculations';
 import { supabase, SUPABASE_CARDS_BUCKET } from './supabase';
 
 type CardType = 'normal' | 'overtime';
@@ -25,8 +35,23 @@ type SaveReferenceResult = {
   skippedInvalidDates: number;
 };
 
+const COMPANY_RUBRIC_KEYS: CompanyRubricKey[] = [
+  'SALARIO_FIXO',
+  'HE_50',
+  'HE_75',
+  'HE_100',
+  'HE_125',
+  'ADIC_NOT',
+  'DSR_HE',
+  'DSR_NOT',
+  'DESC_HE_1',
+  'DESC_HE_2',
+  'ATRASO',
+  'DSR_ATRASO',
+];
+
 const DEFAULT_SETTINGS: Settings = {
-  baseSalary: 2500,
+  baseSalary: 9251.05,
   monthlyHours: 220,
   dailyJourney: 8,
   weeklyLimit: 3,
@@ -40,7 +65,7 @@ const DEFAULT_SETTINGS: Settings = {
   adiantamentoPercent: 40,
   adiantamentoIR: 0,
   saturdayCompensation: false,
-  cycleStartDay: 15,
+  cycleStartDay: 16,
   compDays: '1,2,3,4',
   workStart: '12:00',
   lunchStart: '17:00',
@@ -55,7 +80,92 @@ const DEFAULT_SETTINGS: Settings = {
   companyName: '',
   companyCnpj: '',
   cardNumber: '',
+  companySettings: null,
 };
+
+function createEmptyCompanyRubrics(): CompanyRubricMap {
+  const suggestions = buildSuggestedCompanyRubrics();
+  return COMPANY_RUBRIC_KEYS.reduce((acc, key) => {
+    acc[key] = suggestions[key] || { code: '', label: '' };
+    return acc;
+  }, {} as CompanyRubricMap);
+}
+
+function normalizeRubricEntry(key: CompanyRubricKey, value: any): CompanyRubricEntry {
+  if (value && typeof value === 'object') {
+    return {
+      code: String(value.code || '').trim(),
+      label: String(value.label || '').trim(),
+    };
+  }
+  if (typeof value === 'string') {
+    return {
+      code: value.trim(),
+      label: '',
+    };
+  }
+  return { code: '', label: '' };
+}
+
+function normalizeCompanyRubrics(value: any): CompanyRubricMap {
+  const raw = value && typeof value === 'object' ? value : {};
+  return COMPANY_RUBRIC_KEYS.reduce((acc, key) => {
+    acc[key] = normalizeRubricEntry(key, raw[key]);
+    return acc;
+  }, createEmptyCompanyRubrics());
+}
+
+function normalizeCompanyConfig(value: any): CompanyCalculationConfig {
+  const raw = value && typeof value === 'object' ? value : {};
+  const config: CompanyCalculationConfig = {};
+  if (raw.weeklyLimit != null && raw.weeklyLimit !== '') config.weeklyLimit = Number(raw.weeklyLimit);
+  if (raw.monthlyLimitHE != null && raw.monthlyLimitHE !== '') config.monthlyLimitHE = Number(raw.monthlyLimitHE);
+  if (raw.percentNight != null && raw.percentNight !== '') config.percentNight = Number(raw.percentNight);
+  if (raw.cycleStartDay != null && raw.cycleStartDay !== '') config.cycleStartDay = clampCycleStartDay(raw.cycleStartDay);
+  if (raw.roundingCarryover != null && raw.roundingCarryover !== '') config.roundingCarryover = Number(raw.roundingCarryover);
+  if (Array.isArray(raw.overtimeRules)) {
+    config.overtimeRules = raw.overtimeRules
+      .filter((rule: any) => rule && typeof rule === 'object')
+      .map((rule: any, index: number): CompanyOvertimeRule => ({
+        id: String(rule.id || `rule-${index + 1}`),
+        label: String(rule.label || rule.rubricKey || `Regra ${index + 1}`),
+        rubricKey: String(rule.rubricKey || ''),
+        multiplier: Number(rule.multiplier || 0),
+        period: rule.period === 'day' || rule.period === 'night' || rule.period === 'any' ? rule.period : 'any',
+        dayType: rule.dayType === 'weekday' || rule.dayType === 'sunday' || rule.dayType === 'any' ? rule.dayType : 'weekday',
+        weeklyLimitMinutes: rule.weeklyLimitMinutes == null || rule.weeklyLimitMinutes === '' ? undefined : Number(rule.weeklyLimitMinutes),
+        weeklyLimitGroup: String(rule.weeklyLimitGroup || '').trim() || undefined,
+        monthlyLimitMinutes: rule.monthlyLimitMinutes == null || rule.monthlyLimitMinutes === '' ? undefined : Number(rule.monthlyLimitMinutes),
+        monthlyLimitGroup: String(rule.monthlyLimitGroup || '').trim() || undefined,
+        priority: rule.priority == null || rule.priority === '' ? undefined : Number(rule.priority),
+        active: rule.active == null ? true : !!rule.active,
+      }))
+      .filter((rule) => rule.rubricKey && Number.isFinite(rule.multiplier) && rule.multiplier > 0);
+  }
+  if (Array.isArray(raw.dailyOvertimeDiscountRules)) {
+    config.dailyOvertimeDiscountRules = raw.dailyOvertimeDiscountRules
+      .filter((rule: any) => rule && typeof rule === 'object')
+      .map((rule: any, index: number): CompanyDailyOvertimeDiscountRule => ({
+        id: String(rule.id || `discount-rule-${index + 1}`),
+        label: String(rule.label || `Desconto ${index + 1}`),
+        rubricKey: String(rule.rubricKey || '').trim(),
+        thresholdHours: Number(rule.thresholdHours || 0),
+        discountMinutes: Number(rule.discountMinutes || 0),
+        priority: rule.priority == null || rule.priority === '' ? undefined : Number(rule.priority),
+        active: rule.active == null ? true : !!rule.active,
+      }))
+      .filter((rule) => rule.rubricKey && rule.thresholdHours > 0 && rule.discountMinutes > 0);
+  }
+  return config;
+}
+
+function sanitizeCompanyRubrics(value: CompanyRubricMap | undefined): CompanyRubricMap {
+  return normalizeCompanyRubrics(value);
+}
+
+function sanitizeCompanyConfig(value: CompanyCalculationConfig | undefined): CompanyCalculationConfig {
+  return normalizeCompanyConfig(value);
+}
 
 function ensureSupabase() {
   if (!supabase) throw new Error('Supabase nao configurado.');
@@ -83,6 +193,55 @@ function clampCycleStartDay(raw: any): number {
 function normalizeTextValue(value: any): string | null {
   const txt = String(value ?? '').trim();
   return txt === '' ? null : txt;
+}
+
+function normalizeCnpj(value: any): string {
+  return String(value ?? '').replace(/\D/g, '');
+}
+
+function buildDefaultCompanySettings(cnpj: string, name?: string): CompanySettingsProfile {
+  const config: CompanyCalculationConfig = {
+    weeklyLimit: 3,
+    monthlyLimitHE: 900,
+    percentNight: 25,
+    cycleStartDay: 16,
+  };
+  config.overtimeRules = buildSuggestedOvertimeRules(config);
+  config.dailyOvertimeDiscountRules = buildSuggestedDailyOvertimeDiscountRules();
+  return {
+    cnpj: normalizeCnpj(cnpj),
+    name: String(name || '').trim(),
+    rubrics: createEmptyCompanyRubrics(),
+    config,
+  };
+}
+
+function companySettingsFromRow(row: any): CompanySettingsProfile | null {
+  const cnpj = normalizeCnpj(row?.cnpj);
+  if (!cnpj) return null;
+  const settingsJson = row?.settings_json && typeof row.settings_json === 'object' ? row.settings_json : {};
+  return {
+    id: row?.id ? String(row.id) : undefined,
+    cnpj,
+    name: String(row?.name || '').trim(),
+    rubrics: normalizeCompanyRubrics(settingsJson.rubrics),
+    config: normalizeCompanyConfig(settingsJson.config),
+  };
+}
+
+function companySettingsToRow(userId: string, company: CompanySettingsProfile) {
+  const normalized = buildDefaultCompanySettings(company.cnpj, company.name);
+  const rubrics = sanitizeCompanyRubrics(company.rubrics);
+  const config = sanitizeCompanyConfig(company.config);
+  return {
+    user_id: userId,
+    cnpj: normalized.cnpj,
+    name: String(company.name || normalized.name || '').trim(),
+    settings_json: {
+      rubrics,
+      config,
+    },
+  };
 }
 
 function normalizeClockValue(value: any): string {
@@ -210,7 +369,7 @@ function isValidIsoCalendarDate(value: string): boolean {
 }
 
 function hasAnyContent(row: any): boolean {
-  const fields = [row?.entry1, row?.exit1, row?.entry2, row?.exit2, row?.entryExtra, row?.exitExtra, row?.totalHours];
+  const fields = [row?.entry1, row?.exit1, row?.entry2, row?.exit2, row?.entryExtra, row?.exitExtra, row?.totalHours, row?.annotationText, row?.annotation_text];
   return fields.some((value) => String(value ?? '').trim() !== '') || !!row?.isDPAnnotation;
 }
 
@@ -296,7 +455,7 @@ function settingsRowFromData(userId: string, settings: Settings) {
     role: normalizeTextValue(settings.role),
     location: normalizeTextValue(settings.location),
     company_name: normalizeTextValue(settings.companyName),
-    company_cnpj: normalizeTextValue(settings.companyCnpj),
+    company_cnpj: normalizeTextValue(normalizeCnpj(settings.companyCnpj)),
     card_number: normalizeTextValue(settings.cardNumber),
     dependentes: settings.dependentes ?? 0,
     adiantamento_percent: settings.adiantamentoPercent ?? 40,
@@ -310,6 +469,11 @@ function settingsRowFromData(userId: string, settings: Settings) {
     work_end: settings.workEnd ?? '21:00',
     saturday_work_start: settings.saturdayWorkStart ?? '12:00',
     saturday_work_end: settings.saturdayWorkEnd ?? '16:00',
+    overtime_discount_enabled: settings.overtimeDiscountEnabled ?? true,
+    overtime_discount_threshold_one_hours: settings.overtimeDiscountThresholdOneHours ?? 4,
+    overtime_discount_minutes_one: settings.overtimeDiscountMinutesOne ?? 15,
+    overtime_discount_threshold_two_hours: settings.overtimeDiscountThresholdTwoHours ?? 6,
+    overtime_discount_minutes_two: settings.overtimeDiscountMinutesTwo ?? 60,
   };
 }
 
@@ -350,7 +514,51 @@ function settingsFromRow(row: any): Settings {
     workEnd: row?.work_end ?? DEFAULT_SETTINGS.workEnd,
     saturdayWorkStart: row?.saturday_work_start ?? DEFAULT_SETTINGS.saturdayWorkStart,
     saturdayWorkEnd: row?.saturday_work_end ?? DEFAULT_SETTINGS.saturdayWorkEnd,
+    overtimeDiscountEnabled: row?.overtime_discount_enabled == null
+      ? DEFAULT_SETTINGS.overtimeDiscountEnabled
+      : !!row.overtime_discount_enabled,
+    overtimeDiscountThresholdOneHours: Number(row?.overtime_discount_threshold_one_hours ?? DEFAULT_SETTINGS.overtimeDiscountThresholdOneHours),
+    overtimeDiscountMinutesOne: Number(row?.overtime_discount_minutes_one ?? DEFAULT_SETTINGS.overtimeDiscountMinutesOne),
+    overtimeDiscountThresholdTwoHours: Number(row?.overtime_discount_threshold_two_hours ?? DEFAULT_SETTINGS.overtimeDiscountThresholdTwoHours),
+    overtimeDiscountMinutesTwo: Number(row?.overtime_discount_minutes_two ?? DEFAULT_SETTINGS.overtimeDiscountMinutesTwo),
+    companySettings: null,
   };
+}
+
+export async function getCompanyByCnpj(cnpj: string): Promise<CompanySettingsProfile | null> {
+  const normalizedCnpj = normalizeCnpj(cnpj);
+  if (!normalizedCnpj) return null;
+  const client = ensureSupabase();
+  const userId = await getCurrentUserId();
+  const { data, error } = await client
+    .from('companies')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('cnpj', normalizedCnpj)
+    .maybeSingle();
+  if (error) throw error;
+  return companySettingsFromRow(data);
+}
+
+async function upsertCompanyForUser(userId: string, cnpj?: string, name?: string, companySettings?: CompanySettingsProfile | null): Promise<CompanySettingsProfile | null> {
+  const normalizedCnpj = normalizeCnpj(cnpj);
+  if (!normalizedCnpj) return null;
+  const client = ensureSupabase();
+  const base = companySettings && normalizeCnpj(companySettings.cnpj) === normalizedCnpj
+    ? companySettings
+    : buildDefaultCompanySettings(normalizedCnpj, name);
+  const row = companySettingsToRow(userId, {
+    ...base,
+    cnpj: normalizedCnpj,
+    name: String(name || base.name || '').trim(),
+  });
+  const { data, error } = await client
+    .from('companies')
+    .upsert(row, { onConflict: 'user_id,cnpj' })
+    .select('*')
+    .single();
+  if (error) throw error;
+  return companySettingsFromRow(data);
 }
 
 function buildFullReferenceRows(
@@ -380,6 +588,7 @@ function buildFullReferenceRows(
       exitExtra: src?.exit_extra || '',
       totalHours: src?.total_hours || '',
       isDPAnnotation: !!src?.is_dp_annotation,
+      annotationText: src?.annotation_text || '',
     });
   }
   return output;
@@ -393,7 +602,13 @@ async function ensureSettingsRow(userId: string): Promise<Settings> {
     .eq('user_id', userId)
     .maybeSingle();
   if (error) throw error;
-  if (data) return settingsFromRow(data);
+  if (data) {
+    const settings = settingsFromRow(data);
+    if (settings.companyCnpj) {
+      settings.companySettings = await getCompanyByCnpj(settings.companyCnpj);
+    }
+    return settings;
+  }
   const row = settingsRowFromData(userId, DEFAULT_SETTINGS);
   const { error: insertError } = await client.from('app_settings').upsert(row, { onConflict: 'user_id' });
   if (insertError) throw insertError;
@@ -508,9 +723,14 @@ export async function getSettings(): Promise<Settings> {
 export async function saveSettings(settings: Settings): Promise<void> {
   const client = ensureSupabase();
   const userId = await getCurrentUserId();
+  const companySettings = await upsertCompanyForUser(userId, settings.companyCnpj, settings.companyName, settings.companySettings || null);
   const { error } = await client
     .from('app_settings')
-    .upsert(settingsRowFromData(userId, settings), { onConflict: 'user_id' });
+    .upsert(settingsRowFromData(userId, {
+      ...settings,
+      companyCnpj: normalizeCnpj(settings.companyCnpj),
+      companySettings,
+    }), { onConflict: 'user_id' });
   if (error) throw error;
 }
 
@@ -567,8 +787,11 @@ export async function getReference(ref: string): Promise<any> {
       backImage: null,
       frontImageHe: null,
       backImageHe: null,
+      companySettings: null,
     };
   }
+
+  const companySettings = reference.company_cnpj ? await getCompanyByCnpj(reference.company_cnpj) : null;
 
   const { data: entries, error: entriesError } = await client
     .from('reference_entries')
@@ -578,7 +801,7 @@ export async function getReference(ref: string): Promise<any> {
     .order('day', { ascending: true });
   if (entriesError) throw entriesError;
 
-  const cycleStartDay = clampCycleStartDay(settings.cycleStartDay);
+  const cycleStartDay = clampCycleStartDay(companySettings?.config.cycleStartDay ?? settings.cycleStartDay);
 
   const hasNormalRows = (entries || []).some((entry: any) => entry.card_type === 'normal' && hasAnyContent({
     entry1: entry.entry1,
@@ -589,6 +812,7 @@ export async function getReference(ref: string): Promise<any> {
     exitExtra: entry.exit_extra,
     totalHours: entry.total_hours,
     isDPAnnotation: entry.is_dp_annotation,
+    annotationText: entry.annotation_text,
   }));
   const hasOvertimeRows = (entries || []).some((entry: any) => entry.card_type === 'overtime' && hasAnyContent({
     entry1: entry.entry1,
@@ -599,6 +823,7 @@ export async function getReference(ref: string): Promise<any> {
     exitExtra: entry.exit_extra,
     totalHours: entry.total_hours,
     isDPAnnotation: entry.is_dp_annotation,
+    annotationText: entry.annotation_text,
   }));
 
   const hasNormalCard = !!reference.has_normal_card || hasNormalRows || !!reference.front_image || !!reference.back_image;
@@ -627,6 +852,7 @@ export async function getReference(ref: string): Promise<any> {
     backImage: backImageUrl,
     frontImageHe: frontImageHeUrl,
     backImageHe: backImageHeUrl,
+    companySettings,
     hours: hasNormalCard ? buildFullReferenceRows(entries || [], 'normal', month, year, cycleStartDay) : [],
     he: hasOvertimeCard ? buildFullReferenceRows(entries || [], 'overtime', month, year, cycleStartDay) : [],
   };
@@ -648,7 +874,13 @@ export async function saveReference(ref: string, payload: ReferencePayload): Pro
     ensureSettingsRow(userId),
   ]);
   if (existingReferenceError) throw existingReferenceError;
-  const cycleStartDay = clampCycleStartDay(settings.cycleStartDay);
+  const companySettings = await upsertCompanyForUser(
+    userId,
+    payload.companyCnpj || settings.companyCnpj,
+    payload.companyName || settings.companyName,
+    settings.companySettings || null
+  );
+  const cycleStartDay = clampCycleStartDay(companySettings?.config.cycleStartDay ?? settings.cycleStartDay);
   const existingEntries = existingReferenceRow
     ? await (async () => {
         const { data, error } = await client
@@ -689,7 +921,7 @@ export async function saveReference(ref: string, payload: ReferencePayload): Pro
     month,
     year,
     company_name: normalizeTextValue(payload.companyName || settings.companyName),
-    company_cnpj: normalizeTextValue(payload.companyCnpj || settings.companyCnpj),
+    company_cnpj: normalizeTextValue(normalizeCnpj(payload.companyCnpj || settings.companyCnpj)),
     employee_name: normalizeTextValue(payload.employeeName || settings.employeeName),
     employee_code: normalizeTextValue(payload.employeeCode || settings.employeeCode),
     role: normalizeTextValue(payload.role || settings.role),
@@ -745,6 +977,7 @@ export async function saveReference(ref: string, payload: ReferencePayload): Pro
         exitExtra: pick(row.exitExtra, existing.exitExtra) || '',
         totalHours: '',
         isDPAnnotation: typeof row?.isDPAnnotation === 'boolean' ? row.isDPAnnotation : !!existing.isDPAnnotation,
+        annotationText: pick(row.annotationText, existing.annotationText) || '',
       };
       const totalMinutes = calcEntryTotalMinutes(next);
       next.totalHours = totalMinutes > 0 ? minutesToHHMM(totalMinutes) : '';
@@ -771,6 +1004,7 @@ export async function saveReference(ref: string, payload: ReferencePayload): Pro
         exit_extra: row.exitExtra || null,
         total_hours: row.totalHours || null,
         is_dp_annotation: !!row.isDPAnnotation,
+        annotation_text: row.annotationText || null,
       }];
     });
 
@@ -795,8 +1029,9 @@ export async function saveReference(ref: string, payload: ReferencePayload): Pro
     role: payload.role || settings.role,
     location: payload.location || settings.location,
     companyName: payload.companyName || settings.companyName,
-    companyCnpj: payload.companyCnpj || settings.companyCnpj,
+    companyCnpj: normalizeCnpj(payload.companyCnpj || settings.companyCnpj),
     cardNumber: payload.cardNumber || settings.cardNumber,
+    companySettings,
   };
   await saveSettings(nextSettings);
   return { skippedInvalidDates };
