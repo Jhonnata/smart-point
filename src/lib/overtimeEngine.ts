@@ -6,9 +6,13 @@ import type {
   TimeEntry,
   WeeklySummary
 } from './calculations';
+import { resolveEffectiveCalculationConfig } from './calculations';
 import {
+  getFirstEntryMinutes,
+  getLastExitInfo,
+  getWorkedMinuteSlices,
+  NIGHT_END_MINUTES,
   normalizeOvernightEntries,
-  periodsFromEntry,
   resolveDailyJourneyMinutes,
   sumEntryWorkedMinutes,
   timeToMinutes
@@ -59,7 +63,8 @@ interface MutableTotals {
   totalBancoHoras: number;
   buckets: Map<string, OvertimeBucket>;
   discountBuckets: Map<string, DiscountBucket>;
-  weekUsage: Record<string, number>;
+  weekDayMinutesAcc: number;
+  weekNightMinutesAcc: number;
   monthUsage: Record<string, number>;
 }
 
@@ -80,11 +85,14 @@ interface DayRuleContext {
   isOvertimeCardEntry: boolean;
   dailyJourneyMinutesEntry: number;
   dailyTotalMinutes: number;
+  overtimeSlices: Array<{ isNight: boolean; financialMinutes: number }>;
+  rawOvertimeRealMinutes: number;
   rawOvertimeMinutes: number;
   dayOvertimeMinutes: number;
   ignoreDay: boolean;
   bankOnlyDay: boolean;
-  weekUsageBefore: Record<string, number>;
+  weekDayMinutesAccBefore: number;
+  weekNightMinutesAccBefore: number;
   monthUsageBefore: Record<string, number>;
 }
 
@@ -111,12 +119,22 @@ export interface OvertimeComputationResult {
   discountBuckets: Array<DiscountBucket & { hours: number }>;
 }
 
+export interface DailyOvertimePreview {
+  workedMinutes: number;
+  dailyJourneyMinutes: number;
+  rawOvertimeRealMinutes: number;
+  rawOvertimeMinutes: number;
+  discountRealMinutes: number;
+  dayOvertimeRealMinutes: number;
+  dayOvertimeMinutes: number;
+}
+
 function buildRates(settings: Settings): RatePack {
-  const companyConfig = settings.companySettings?.config;
+  const effectiveConfig = resolveEffectiveCalculationConfig(settings);
   const hourlyRate = (settings.baseSalary || 0) / (settings.monthlyHours || 1);
-  const rate50 = hourlyRate * (1 + (settings.percent50 || 0) / 100);
-  const rate100 = hourlyRate * (1 + (settings.percent100 || 0) / 100);
-  const percentNight = Number(companyConfig?.percentNight ?? settings.percentNight ?? 0);
+  const rate50 = hourlyRate * (1 + effectiveConfig.percent50 / 100);
+  const rate100 = hourlyRate * (1 + effectiveConfig.percent100 / 100);
+  const percentNight = effectiveConfig.percentNight;
   const rate75 = rate50 * (1 + percentNight / 100);
   const rate125 = rate100 * (1 + percentNight / 100);
   return { hourlyRate, rate50, rate75, rate100, rate125 };
@@ -146,7 +164,8 @@ function createMutableTotals(): MutableTotals {
     totalBancoHoras: 0,
     buckets: new Map(),
     discountBuckets: new Map(),
-    weekUsage: {},
+    weekDayMinutesAcc: 0,
+    weekNightMinutesAcc: 0,
     monthUsage: {},
   };
 }
@@ -173,7 +192,7 @@ export function resolveDailyOvertimeDiscountMinutes(
 
   const companyRules = (settings?.companySettings?.config?.dailyOvertimeDiscountRules || [])
     .filter((rule) => rule && rule.active !== false && Number(rule.thresholdHours) > 0 && Number(rule.discountMinutes) > 0)
-    .sort((a, b) => Number(b.thresholdHours) - Number(a.thresholdHours));
+    .sort((a, b) => Number(a.thresholdHours) - Number(b.thresholdHours) || Number(a.discountMinutes) - Number(b.discountMinutes));
   if (companyRules.length > 0) {
     for (const rule of companyRules) {
       if (rawOvertimeMinutes >= Number(rule.thresholdHours) * 60) {
@@ -197,13 +216,11 @@ export function resolveDailyOvertimeDiscountMinutes(
     },
   ]
     .filter((rule) => rule.thresholdHours > 0 && rule.discountMinutes > 0)
-    .sort((a, b) => b.thresholdHours - a.thresholdHours);
+    .sort((a, b) => a.thresholdHours - b.thresholdHours || a.discountMinutes - b.discountMinutes);
 
   for (let index = 0; index < rules.length; index++) {
     const rule = rules[index];
-    const matches = index === 0
-      ? Math.round(rawOvertimeMinutes / 60) >= rule.thresholdHours
-      : rawOvertimeMinutes >= rule.thresholdHours * 60;
+    const matches = rawOvertimeMinutes >= rule.thresholdHours * 60;
     if (matches) return rule.discountMinutes;
   }
 
@@ -222,7 +239,7 @@ function resolveCompanyDiscountRules(settings: Settings): CompanyDailyOvertimeDi
       discountMinutes: Number(rule.discountMinutes),
       priority: Number(rule.priority ?? index + 1),
     }))
-    .sort((a, b) => Number(b.thresholdHours) - Number(a.thresholdHours) || Number(a.priority || 0) - Number(b.priority || 0));
+    .sort((a, b) => Number(a.thresholdHours) - Number(b.thresholdHours) || Number(a.priority || 0) - Number(b.priority || 0));
 
   if (configuredRules.length > 0) return configuredRules;
 
@@ -230,21 +247,21 @@ function resolveCompanyDiscountRules(settings: Settings): CompanyDailyOvertimeDi
   if (!enabled) return [];
   return [
     {
-      id: 'legacy-discount-2',
-      label: 'Desconto diario HE faixa 2',
-      rubricKey: 'DESC_HE_2',
-      thresholdHours: Math.max(0, Number(settings.overtimeDiscountThresholdTwoHours ?? 6)),
-      discountMinutes: Math.max(0, Number(settings.overtimeDiscountMinutesTwo ?? 60)),
-      priority: 2,
-      active: true,
-    },
-    {
       id: 'legacy-discount-1',
       label: 'Desconto diario HE faixa 1',
       rubricKey: 'DESC_HE_1',
       thresholdHours: Math.max(0, Number(settings.overtimeDiscountThresholdOneHours ?? 4)),
       discountMinutes: Math.max(0, Number(settings.overtimeDiscountMinutesOne ?? 15)),
       priority: 1,
+      active: true,
+    },
+    {
+      id: 'legacy-discount-2',
+      label: 'Desconto diario HE faixa 2',
+      rubricKey: 'DESC_HE_2',
+      thresholdHours: Math.max(0, Number(settings.overtimeDiscountThresholdTwoHours ?? 6)),
+      discountMinutes: Math.max(0, Number(settings.overtimeDiscountMinutesTwo ?? 60)),
+      priority: 2,
       active: true,
     },
   ].filter((rule) => rule.thresholdHours > 0 && rule.discountMinutes > 0);
@@ -267,8 +284,9 @@ function resolveCompanyRules(settings: Settings, rates: RatePack): CompanyOverti
 
   if (configuredRules.length > 0) return configuredRules;
 
-  const weeklyLimitMinutes = Math.max(0, Number(settings.companySettings?.config?.weeklyLimit ?? settings.weeklyLimit ?? 0) * 60);
-  const monthlyLimitMinutes = Math.max(0, Number(settings.companySettings?.config?.monthlyLimitHE ?? 0));
+  const effectiveConfig = resolveEffectiveCalculationConfig(settings);
+  const weeklyLimitMinutes = Math.max(0, Number(effectiveConfig.weeklyLimit ?? 0) * 60);
+  const monthlyLimitMinutes = Math.max(0, Number(effectiveConfig.monthlyLimitHE ?? 0));
 
   return [
     {
@@ -374,19 +392,20 @@ function recordDiscountAmount(
   totals.discountBuckets.set(rule.rubricKey, existing);
 }
 
-function incrementLegacyBuckets(totals: MutableTotals, minuteRate: number, rates: RatePack) {
+function incrementLegacyBuckets(totals: MutableTotals, minuteRate: number, rates: RatePack, financialMinutes: number) {
   const epsilon = 0.0001;
-  if (Math.abs(minuteRate - rates.rate50) < epsilon) totals.total50Minutes += 1;
-  else if (Math.abs(minuteRate - rates.rate75) < epsilon) totals.total75Minutes += 1;
-  else if (Math.abs(minuteRate - rates.rate100) < epsilon) totals.total100Minutes += 1;
-  else if (Math.abs(minuteRate - rates.rate125) < epsilon) totals.total125Minutes += 1;
+  if (Math.abs(minuteRate - rates.rate50) < epsilon) totals.total50Minutes += financialMinutes;
+  else if (Math.abs(minuteRate - rates.rate75) < epsilon) totals.total75Minutes += financialMinutes;
+  else if (Math.abs(minuteRate - rates.rate100) < epsilon) totals.total100Minutes += financialMinutes;
+  else if (Math.abs(minuteRate - rates.rate125) < epsilon) totals.total125Minutes += financialMinutes;
 }
 
 function recordRuleMinute(
   totals: MutableTotals,
   settings: Settings,
   rates: RatePack,
-  rule: CompanyOvertimeRule
+  rule: CompanyOvertimeRule,
+  financialMinutes: number
 ) {
   const rubric = resolveRubricEntry(settings, rule.rubricKey, rule.label);
   const bucketKey = rule.rubricKey;
@@ -400,13 +419,13 @@ function recordRuleMinute(
     minutes: 0,
     amount: 0,
   };
-  existing.minutes += 1;
-  existing.amount += (rates.hourlyRate * rule.multiplier) / 60;
+  existing.minutes += financialMinutes;
+  existing.amount += ((rates.hourlyRate * rule.multiplier) / 60) * financialMinutes;
   existing.code = rubric.code;
   existing.label = rubric.label;
   existing.period = rule.period || 'any';
   totals.buckets.set(bucketKey, existing);
-  incrementLegacyBuckets(totals, rates.hourlyRate * rule.multiplier, rates);
+  incrementLegacyBuckets(totals, rates.hourlyRate * rule.multiplier, rates, financialMinutes);
 }
 
 function ruleMatches(rule: CompanyOvertimeRule, isNight: boolean, isSunday: boolean): boolean {
@@ -417,43 +436,87 @@ function ruleMatches(rule: CompanyOvertimeRule, isNight: boolean, isSunday: bool
   return periodMatch && dayMatch;
 }
 
-function canUseRule(rule: CompanyOvertimeRule, weekUsage: Record<string, number>, monthUsage: Record<string, number>): boolean {
+function getAvailableRuleCapacity(rule: CompanyOvertimeRule, week: MutableTotals, monthUsage: Record<string, number>): number {
   const weeklyLimit = Math.max(0, Number(rule.weeklyLimitMinutes || 0));
   const monthlyLimit = Math.max(0, Number(rule.monthlyLimitMinutes || 0));
-  const weeklyGroup = rule.weeklyLimitGroup || rule.id;
   const monthlyGroup = rule.monthlyLimitGroup || rule.id;
-  const weeklyOk = weeklyLimit <= 0 || (weekUsage[weeklyGroup] || 0) < weeklyLimit;
-  const monthlyOk = monthlyLimit <= 0 || (monthUsage[monthlyGroup] || 0) < monthlyLimit;
+  const weeklyAccumulator = (rule.period || 'any') === 'night' ? week.weekNightMinutesAcc : week.weekDayMinutesAcc;
+  const weeklyAvailable = weeklyLimit > 0 ? Math.max(0, weeklyLimit - weeklyAccumulator) : Number.POSITIVE_INFINITY;
+  const monthlyAvailable = monthlyLimit > 0 ? Math.max(0, monthlyLimit - (monthUsage[monthlyGroup] || 0)) : Number.POSITIVE_INFINITY;
+  return Math.min(weeklyAvailable, monthlyAvailable);
+}
+
+function canUseRule(rule: CompanyOvertimeRule, week: MutableTotals, monthUsage: Record<string, number>, financialMinutes: number): boolean {
+  const monthlyLimit = Math.max(0, Number(rule.monthlyLimitMinutes || 0));
+  const monthlyGroup = rule.monthlyLimitGroup || rule.id;
+  const weeklyOk = getAvailableRuleCapacity(rule, week, monthUsage) + 0.0001 >= financialMinutes;
+  const monthlyOk = monthlyLimit <= 0 || (monthUsage[monthlyGroup] || 0) + financialMinutes <= monthlyLimit + 0.0001;
   return weeklyOk && monthlyOk;
 }
 
-function consumeRuleUsage(rule: CompanyOvertimeRule, weekUsage: Record<string, number>, monthUsage: Record<string, number>) {
+function consumeRuleUsage(rule: CompanyOvertimeRule, week: MutableTotals, monthUsage: Record<string, number>, financialMinutes: number) {
   const weeklyLimit = Math.max(0, Number(rule.weeklyLimitMinutes || 0));
   const monthlyLimit = Math.max(0, Number(rule.monthlyLimitMinutes || 0));
   if (weeklyLimit > 0) {
-    const weeklyGroup = rule.weeklyLimitGroup || rule.id;
-    weekUsage[weeklyGroup] = (weekUsage[weeklyGroup] || 0) + 1;
+    if ((rule.period || 'any') === 'night') week.weekNightMinutesAcc += financialMinutes;
+    else week.weekDayMinutesAcc += financialMinutes;
   }
   if (monthlyLimit > 0) {
     const monthlyGroup = rule.monthlyLimitGroup || rule.id;
-    monthUsage[monthlyGroup] = (monthUsage[monthlyGroup] || 0) + 1;
+    monthUsage[monthlyGroup] = (monthUsage[monthlyGroup] || 0) + financialMinutes;
   }
 }
 
-function pickRule(rules: CompanyOvertimeRule[], isNight: boolean, isSunday: boolean, weekUsage: Record<string, number>, monthUsage: Record<string, number>) {
+function pickRule(rules: CompanyOvertimeRule[], isNight: boolean, isSunday: boolean, week: MutableTotals, monthUsage: Record<string, number>, financialMinutes: number) {
   const matching = rules.filter((rule) => ruleMatches(rule, isNight, isSunday));
   if (matching.length === 0) return null;
   for (const rule of matching) {
-    if (canUseRule(rule, weekUsage, monthUsage)) return rule;
+    if (canUseRule(rule, week, monthUsage, financialMinutes)) return rule;
   }
   return matching[matching.length - 1];
+}
+
+function allocateSliceAcrossRules(
+  financialMinutes: number,
+  isNight: boolean,
+  isSunday: boolean,
+  rules: CompanyOvertimeRule[],
+  week: MutableTotals,
+  monthUsage: Record<string, number>,
+  apply: (rule: CompanyOvertimeRule, allocatedFinancialMinutes: number) => void
+) {
+  let remaining = financialMinutes;
+  const matching = rules.filter((rule) => ruleMatches(rule, isNight, isSunday));
+  if (matching.length === 0) return;
+
+  for (let index = 0; index < matching.length && remaining > 0.0001; index++) {
+    const rule = matching[index];
+    const isLast = index === matching.length - 1;
+    const available = getAvailableRuleCapacity(rule, week, monthUsage);
+    const allocatable = Number.isFinite(available)
+      ? Math.min(remaining, Math.max(0, available))
+      : remaining;
+
+    if (allocatable > 0.0001) {
+      consumeRuleUsage(rule, week, monthUsage, allocatable);
+      apply(rule, allocatable);
+      remaining -= allocatable;
+      continue;
+    }
+
+    if (isLast) {
+      consumeRuleUsage(rule, week, monthUsage, remaining);
+      apply(rule, remaining);
+      remaining = 0;
+    }
+  }
 }
 
 const resolveJourneyRule: DayRule = (ctx, next) => {
   const date = parseISO(ctx.entry.date);
   const dayOfWeek = isValid(date) ? date.getDay() : 0;
   ctx.dailyJourneyMinutesEntry = resolveDailyJourneyMinutes(
-    ctx.settings.dailyJourney || 0,
+    resolveEffectiveCalculationConfig(ctx.settings).dailyJourney,
     ctx.isOvertimeCardEntry,
     dayOfWeek,
     !!ctx.settings.saturdayCompensation,
@@ -466,6 +529,8 @@ const computeWorkedTimeRule: DayRule = (ctx, next) => {
   if (hasAnnotationKeyword(ctx.entry.annotationText, 'ABONADO') || hasAnnotationKeyword(ctx.entry.annotationText, 'FALTA ABONADA')) {
     ctx.ignoreDay = true;
     ctx.dailyTotalMinutes = 0;
+    ctx.overtimeSlices = [];
+    ctx.rawOvertimeRealMinutes = 0;
     ctx.rawOvertimeMinutes = 0;
     ctx.dayOvertimeMinutes = 0;
     next();
@@ -476,24 +541,103 @@ const computeWorkedTimeRule: DayRule = (ctx, next) => {
   next();
 };
 
-function applyOvertimeDiscounts(rawOvertimeMinutes: number, settings: Settings): number {
-  const discountMinutes = resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes, settings);
-  return Math.max(0, rawOvertimeMinutes - discountMinutes);
-}
-
 const computeDayOvertimeRule: DayRule = (ctx, next) => {
   if (ctx.ignoreDay) {
+    ctx.overtimeSlices = [];
+    ctx.rawOvertimeRealMinutes = 0;
     ctx.rawOvertimeMinutes = 0;
     ctx.dayOvertimeMinutes = 0;
     next();
     return;
   }
-  ctx.rawOvertimeMinutes = ctx.isSunday
-    ? ctx.dailyTotalMinutes
-    : Math.max(0, ctx.dailyTotalMinutes - (ctx.dailyJourneyMinutesEntry || (ctx.dailyTotalMinutes > 0 ? 0 : Infinity)));
-  ctx.dayOvertimeMinutes = applyOvertimeDiscounts(ctx.rawOvertimeMinutes, ctx.settings);
+
+  const preview = analyzeDailyOvertimePreview(
+    { ...ctx.entry, isOvertimeCard: ctx.isOvertimeCardEntry },
+    ctx.settings
+  );
+  const workedSlices = getWorkedMinuteSlices(ctx.entry, ctx.nightCutoffMinutes, NIGHT_END_MINUTES);
+  const overtimeSlices: Array<{ isNight: boolean; financialMinutes: number }> = [];
+  let workedRealMinutes = 0;
+  for (const slice of workedSlices) {
+    const countsAsOvertime = ctx.isSunday || workedRealMinutes >= ctx.dailyJourneyMinutesEntry;
+    workedRealMinutes += 1;
+    if (!countsAsOvertime) continue;
+    overtimeSlices.push({
+      isNight: slice.isNight,
+      financialMinutes: slice.financialMinutes,
+    });
+  }
+
+  ctx.overtimeSlices = overtimeSlices;
+  ctx.rawOvertimeRealMinutes = preview.rawOvertimeRealMinutes;
+  ctx.rawOvertimeMinutes = preview.rawOvertimeMinutes;
+  ctx.dayOvertimeMinutes = preview.dayOvertimeMinutes;
   next();
 };
+
+export function analyzeDailyOvertimePreview(entry: TimeEntry, settings: Settings): DailyOvertimePreview {
+  const normalizedEntry = normalizeOvernightEntries([entry])[0] || entry;
+  const effectiveConfig = resolveEffectiveCalculationConfig(settings);
+  const date = parseISO(normalizedEntry.date);
+  const dayOfWeek = isValid(date) ? date.getDay() : 0;
+  const isSunday = dayOfWeek === 0;
+  const dailyJourneyMinutes = resolveDailyJourneyMinutes(
+    effectiveConfig.dailyJourney,
+    !!normalizedEntry.isOvertimeCard,
+    dayOfWeek,
+    !!settings.saturdayCompensation,
+    settings.compDays
+  );
+  const workedMinutes = sumEntryWorkedMinutes(normalizedEntry);
+
+  if (!normalizedEntry.isOvertimeCard) {
+    return {
+      workedMinutes,
+      dailyJourneyMinutes,
+      rawOvertimeRealMinutes: 0,
+      rawOvertimeMinutes: 0,
+      discountRealMinutes: 0,
+      dayOvertimeRealMinutes: workedMinutes,
+      dayOvertimeMinutes: workedMinutes,
+    };
+  }
+
+  const nightCutoffMinutes = timeToMinutes(effectiveConfig.nightCutoff || '22:00');
+  const workedSlices = getWorkedMinuteSlices(normalizedEntry, nightCutoffMinutes, NIGHT_END_MINUTES);
+  const overtimeSlices: Array<{ isNight: boolean; financialMinutes: number }> = [];
+  let workedRealMinutes = 0;
+
+  for (const slice of workedSlices) {
+    const countsAsOvertime = isSunday || workedRealMinutes >= dailyJourneyMinutes;
+    workedRealMinutes += 1;
+    if (!countsAsOvertime) continue;
+    overtimeSlices.push({
+      isNight: slice.isNight,
+      financialMinutes: slice.financialMinutes,
+    });
+  }
+
+  const rawOvertimeRealMinutes = overtimeSlices.length;
+  const rawOvertimeMinutes = Number(overtimeSlices.reduce((sum, slice) => sum + slice.financialMinutes, 0).toFixed(4));
+  const discountRealMinutes = resolveDailyOvertimeDiscountMinutes(rawOvertimeRealMinutes, settings);
+  const dayOvertimeRealMinutes = Math.max(0, rawOvertimeRealMinutes - discountRealMinutes);
+  const dayOvertimeMinutes = Number(
+    overtimeSlices
+      .slice(discountRealMinutes)
+      .reduce((sum, slice) => sum + slice.financialMinutes, 0)
+      .toFixed(4)
+  );
+
+  return {
+    workedMinutes,
+    dailyJourneyMinutes,
+    rawOvertimeRealMinutes,
+    rawOvertimeMinutes,
+    discountRealMinutes,
+    dayOvertimeRealMinutes,
+    dayOvertimeMinutes,
+  };
+}
 
 const classifyAndAccumulateRule: DayRule = (ctx, next) => {
   if (ctx.ignoreDay || ctx.dayOvertimeMinutes <= 0) {
@@ -508,44 +652,36 @@ const classifyAndAccumulateRule: DayRule = (ctx, next) => {
     return;
   }
 
-  const totalOvertimeToProcess = Math.round(ctx.dayOvertimeMinutes);
-  let remainingDiscountMinutes = Math.max(0, Math.round(ctx.rawOvertimeMinutes - ctx.dayOvertimeMinutes));
-  let processedOvertimeMinutes = 0;
-  const periods = periodsFromEntry(ctx.entry);
+  let remainingDiscountRealMinutes = resolveDailyOvertimeDiscountMinutes(ctx.rawOvertimeRealMinutes, ctx.settings);
+  let processedFinancialMinutes = 0;
 
-  for (const [start, end] of periods) {
-    if (processedOvertimeMinutes >= totalOvertimeToProcess) break;
-    if (!start || !start.includes(':') || !end || !end.includes(':')) continue;
+  for (const slice of ctx.overtimeSlices) {
+    if (processedFinancialMinutes + 0.0001 >= ctx.dayOvertimeMinutes) break;
 
-    const startMinutes = timeToMinutes(start);
-    const endMinutes = timeToMinutes(end);
-    let duration = endMinutes - startMinutes;
-    if (duration < 0) duration += 24 * 60;
-    if (duration <= 0) continue;
-
-    for (let offset = 0; offset < duration; offset++) {
-      let minuteOfDay = startMinutes + offset;
-      while (minuteOfDay >= 24 * 60) minuteOfDay -= 24 * 60;
-
-      if (!ctx.isSunday && offset < ctx.dailyJourneyMinutesEntry) continue;
-      if (remainingDiscountMinutes > 0) {
-        remainingDiscountMinutes -= 1;
-        continue;
-      }
-      if (processedOvertimeMinutes >= totalOvertimeToProcess) break;
-
-      const isNight = minuteOfDay >= ctx.nightCutoffMinutes || minuteOfDay < 5 * 60;
-      const rule = pickRule(ctx.rules, isNight, ctx.isSunday, ctx.week.weekUsage, ctx.grand.monthUsage);
-      if (!rule) {
-        processedOvertimeMinutes += 1;
-        continue;
-      }
-
-      consumeRuleUsage(rule, ctx.week.weekUsage, ctx.grand.monthUsage);
-      recordRuleMinute(ctx.week, ctx.settings, ctx.rates, rule);
-      recordRuleMinute(ctx.grand, ctx.settings, ctx.rates, rule);
-      processedOvertimeMinutes += 1;
+    if (remainingDiscountRealMinutes > 0) {
+      remainingDiscountRealMinutes -= 1;
+      continue;
     }
+
+    const financialMinutes = Math.min(slice.financialMinutes, ctx.dayOvertimeMinutes - processedFinancialMinutes);
+    const rule = pickRule(ctx.rules, slice.isNight, ctx.isSunday, ctx.week, ctx.grand.monthUsage, financialMinutes);
+    if (!rule) {
+      processedFinancialMinutes += financialMinutes;
+      continue;
+    }
+    allocateSliceAcrossRules(
+      financialMinutes,
+      slice.isNight,
+      ctx.isSunday,
+      ctx.rules,
+      ctx.week,
+      ctx.grand.monthUsage,
+      (matchedRule, allocatedFinancialMinutes) => {
+        recordRuleMinute(ctx.week, ctx.settings, ctx.rates, matchedRule, allocatedFinancialMinutes);
+        recordRuleMinute(ctx.grand, ctx.settings, ctx.rates, matchedRule, allocatedFinancialMinutes);
+      }
+    );
+    processedFinancialMinutes += financialMinutes;
   }
 
   next();
@@ -602,46 +738,108 @@ function mapDiscountBucketsForOutput(buckets: Map<string, DiscountBucket>) {
     .sort((a, b) => a.label.localeCompare(b.label));
 }
 
-function buildMinuteTimeline(entry: TimeEntry, isSunday: boolean, dailyJourneyMinutesEntry: number, nightCutoffMinutes: number): boolean[] {
-  const periods = periodsFromEntry(entry);
-  const flags: boolean[] = [];
+function buildMinuteTimeline(entry: TimeEntry, isSunday: boolean, dailyJourneyMinutesEntry: number): Array<{ isNight: boolean; financialMinutes: number }> {
+  const slices = getWorkedMinuteSlices(entry);
+  const timeline: Array<{ isNight: boolean; financialMinutes: number }> = [];
   let workedOffset = 0;
 
-  for (const [start, end] of periods) {
-    if (!start || !start.includes(':') || !end || !end.includes(':')) continue;
-    const startMinutes = timeToMinutes(start);
-    const endMinutes = timeToMinutes(end);
-    let duration = endMinutes - startMinutes;
-    if (duration < 0) duration += 24 * 60;
-    if (duration <= 0) continue;
-
-    for (let offset = 0; offset < duration; offset++) {
-      let minuteOfDay = startMinutes + offset;
-      while (minuteOfDay >= 24 * 60) minuteOfDay -= 24 * 60;
-      const countsAsOvertime = isSunday || workedOffset >= dailyJourneyMinutesEntry;
-      workedOffset += 1;
-      if (!countsAsOvertime) continue;
-      flags.push(minuteOfDay >= nightCutoffMinutes || minuteOfDay < 5 * 60);
-    }
+  for (const slice of slices) {
+    const countsAsOvertime = isSunday || workedOffset >= dailyJourneyMinutesEntry;
+    workedOffset += 1;
+    if (!countsAsOvertime) continue;
+    timeline.push({
+      isNight: slice.isNight,
+      financialMinutes: slice.financialMinutes,
+    });
   }
-  return flags;
+  return timeline;
 }
 
 function classifyTimelineMinutes(
-  flags: boolean[],
+  slices: Array<{ isNight: boolean; financialMinutes: number }>,
   rules: CompanyOvertimeRule[],
   isSunday: boolean,
-  weekUsage: Record<string, number>,
+  week: MutableTotals,
   monthUsage: Record<string, number>
 ) {
-  const allocations: CompanyOvertimeRule[] = [];
-  for (const isNight of flags) {
-    const rule = pickRule(rules, isNight, isSunday, weekUsage, monthUsage);
-    if (!rule) continue;
-    consumeRuleUsage(rule, weekUsage, monthUsage);
-    allocations.push(rule);
+  const allocations: Array<{ rule: CompanyOvertimeRule; financialMinutes: number }> = [];
+  for (const slice of slices) {
+    const pickedRule = pickRule(rules, slice.isNight, isSunday, week, monthUsage, slice.financialMinutes);
+    if (!pickedRule) continue;
+    allocateSliceAcrossRules(
+      slice.financialMinutes,
+      slice.isNight,
+      isSunday,
+      rules,
+      week,
+      monthUsage,
+      (rule, financialMinutes) => {
+        allocations.push({ rule, financialMinutes });
+      }
+    );
   }
   return allocations;
+}
+
+function takeSlicesUntilFinancialTarget(
+  slices: Array<{ isNight: boolean; financialMinutes: number }>,
+  financialTarget: number
+) {
+  const selected: Array<{ isNight: boolean; financialMinutes: number }> = [];
+  let consumed = 0;
+  for (const slice of slices) {
+    if (consumed + 0.0001 >= financialTarget) break;
+    selected.push(slice);
+    consumed += slice.financialMinutes;
+  }
+  return selected;
+}
+
+function recordInterjornadaBuckets(entries: TimeEntry[], settings: Settings, totals: MutableTotals, hourlyRate: number) {
+  const sorted = entries
+    .filter((entry) => !!entry.date)
+    .slice()
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  for (let index = 0; index < sorted.length - 1; index++) {
+    const current = sorted[index];
+    const next = sorted[index + 1];
+    const currentDate = parseISO(current.date);
+    const nextDate = parseISO(next.date);
+    if (!isValid(currentDate) || !isValid(nextDate)) continue;
+
+    const lastExit = getLastExitInfo(current);
+    const firstEntry = getFirstEntryMinutes(next);
+    if (!lastExit || firstEntry == null) continue;
+
+    const currentExitAt = new Date(currentDate);
+    currentExitAt.setDate(currentExitAt.getDate() + lastExit.dayOffset);
+    currentExitAt.setHours(0, 0, 0, 0);
+    currentExitAt.setMinutes(lastExit.minuteOfDay);
+
+    const nextEntryAt = new Date(nextDate);
+    nextEntryAt.setHours(0, 0, 0, 0);
+    nextEntryAt.setMinutes(firstEntry);
+
+    const interjornadaMinutes = Math.round((nextEntryAt.getTime() - currentExitAt.getTime()) / 60000);
+    if (interjornadaMinutes >= 11 * 60 || interjornadaMinutes <= 0) continue;
+
+    const missingMinutes = 11 * 60 - interjornadaMinutes;
+    const rubric = resolveRubricEntry(settings, 'INTERJORNADA', 'Indenizacao Interjornada');
+    const existing = totals.buckets.get('INTERJORNADA') || {
+      rubricKey: 'INTERJORNADA',
+      code: rubric.code,
+      label: rubric.label,
+      ruleId: 'interjornada',
+      multiplier: 1,
+      period: 'any' as const,
+      minutes: 0,
+      amount: 0,
+    };
+    existing.minutes += missingMinutes;
+    existing.amount += (hourlyRate / 60) * missingMinutes;
+    totals.buckets.set('INTERJORNADA', existing);
+  }
 }
 
 export function runOvertimeEngine(entries: TimeEntry[], settings: Settings): OvertimeComputationResult {
@@ -649,7 +847,7 @@ export function runOvertimeEngine(entries: TimeEntry[], settings: Settings): Ove
   const rates = buildRates(settings);
   const rules = resolveCompanyRules(settings, rates);
   const discountRules = resolveCompanyDiscountRules(settings);
-  const nightCutoffMinutes = timeToMinutes(settings.nightCutoff || '22:00');
+  const nightCutoffMinutes = timeToMinutes(resolveEffectiveCalculationConfig(settings).nightCutoff || '22:00');
   const groupedWeeks = groupByRealWeek(effectiveEntries);
 
   const grand = createMutableTotals();
@@ -680,11 +878,14 @@ export function runOvertimeEngine(entries: TimeEntry[], settings: Settings): Ove
         isOvertimeCardEntry: !!entry.isOvertimeCard,
         dailyJourneyMinutesEntry: 0,
         dailyTotalMinutes: 0,
+        overtimeSlices: [],
+        rawOvertimeRealMinutes: 0,
         rawOvertimeMinutes: 0,
         dayOvertimeMinutes: 0,
         ignoreDay: false,
         bankOnlyDay: false,
-        weekUsageBefore: { ...week.weekUsage },
+        weekDayMinutesAccBefore: week.weekDayMinutesAcc,
+        weekNightMinutesAccBefore: week.weekNightMinutesAcc,
         monthUsageBefore: { ...grand.monthUsage },
       };
       runDayRuleChain(ctx);
@@ -696,20 +897,30 @@ export function runOvertimeEngine(entries: TimeEntry[], settings: Settings): Ove
         ctx.rawOvertimeMinutes > ctx.dayOvertimeMinutes &&
         ctx.dayOvertimeMinutes >= 0
       ) {
-        const appliedDiscountRule = discountRules.find((rule) => ctx.rawOvertimeMinutes >= rule.thresholdHours * 60);
+        const appliedDiscountRule = discountRules.find((rule) => ctx.rawOvertimeRealMinutes >= rule.thresholdHours * 60);
         if (appliedDiscountRule) {
-          const rawTimeline = buildMinuteTimeline(entry, ctx.isSunday, ctx.dailyJourneyMinutesEntry, nightCutoffMinutes);
-          const rawAllocations = classifyTimelineMinutes(rawTimeline.slice(0, Math.round(ctx.rawOvertimeMinutes)), rules, ctx.isSunday, { ...ctx.weekUsageBefore }, { ...ctx.monthUsageBefore });
-          const netAllocations = classifyTimelineMinutes(rawTimeline.slice(0, Math.round(ctx.dayOvertimeMinutes)), rules, ctx.isSunday, { ...ctx.weekUsageBefore }, { ...ctx.monthUsageBefore });
-          const rawAmount = rawAllocations.reduce((sum, rule) => sum + ((rates.hourlyRate * rule.multiplier) / 60), 0);
-          const netAmount = netAllocations.reduce((sum, rule) => sum + ((rates.hourlyRate * rule.multiplier) / 60), 0);
+          const rawTimeline = ctx.overtimeSlices;
+          const rawSlices = takeSlicesUntilFinancialTarget(rawTimeline, ctx.rawOvertimeMinutes);
+          const netSlices = takeSlicesUntilFinancialTarget(rawTimeline.slice(resolveDailyOvertimeDiscountMinutes(ctx.rawOvertimeRealMinutes, ctx.settings)), ctx.dayOvertimeMinutes);
+          const rawWeek = createMutableTotals();
+          rawWeek.weekDayMinutesAcc = ctx.weekDayMinutesAccBefore;
+          rawWeek.weekNightMinutesAcc = ctx.weekNightMinutesAccBefore;
+          const rawAllocations = classifyTimelineMinutes(rawSlices, rules, ctx.isSunday, rawWeek, { ...ctx.monthUsageBefore });
+          const netWeek = createMutableTotals();
+          netWeek.weekDayMinutesAcc = ctx.weekDayMinutesAccBefore;
+          netWeek.weekNightMinutesAcc = ctx.weekNightMinutesAccBefore;
+          const netAllocations = classifyTimelineMinutes(netSlices, rules, ctx.isSunday, netWeek, { ...ctx.monthUsageBefore });
+          const rawAmount = rawAllocations.reduce((sum, allocation) => sum + ((rates.hourlyRate * allocation.rule.multiplier) / 60) * allocation.financialMinutes, 0);
+          const netAmount = netAllocations.reduce((sum, allocation) => sum + ((rates.hourlyRate * allocation.rule.multiplier) / 60) * allocation.financialMinutes, 0);
           const discountAmount = Math.max(0, rawAmount - netAmount);
-          const discountMinutes = Math.max(0, Math.round(ctx.rawOvertimeMinutes - ctx.dayOvertimeMinutes));
+          const discountMinutes = Math.max(0, resolveDailyOvertimeDiscountMinutes(ctx.rawOvertimeRealMinutes, ctx.settings));
           recordDiscountAmount(week, settings, appliedDiscountRule, discountMinutes, discountAmount);
           recordDiscountAmount(grand, settings, appliedDiscountRule, discountMinutes, discountAmount);
         }
       }
     });
+
+    recordInterjornadaBuckets(weekEntries, settings, week, rates.hourlyRate);
 
     const weekValue = Number(Array.from(week.buckets.values()).reduce((sum, bucket) => sum + bucket.amount, 0).toFixed(2));
     grandTotalValue += weekValue;
@@ -735,6 +946,8 @@ export function runOvertimeEngine(entries: TimeEntry[], settings: Settings): Ove
       ),
     });
   });
+
+  recordInterjornadaBuckets(effectiveEntries, settings, grand, rates.hourlyRate);
 
   return {
     weeklySummaries,

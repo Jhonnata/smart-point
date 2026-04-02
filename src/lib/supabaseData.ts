@@ -118,8 +118,12 @@ function normalizeCompanyRubrics(value: any): CompanyRubricMap {
 function normalizeCompanyConfig(value: any): CompanyCalculationConfig {
   const raw = value && typeof value === 'object' ? value : {};
   const config: CompanyCalculationConfig = {};
+  if (raw.dailyJourney != null && raw.dailyJourney !== '') config.dailyJourney = Number(raw.dailyJourney);
   if (raw.weeklyLimit != null && raw.weeklyLimit !== '') config.weeklyLimit = Number(raw.weeklyLimit);
   if (raw.monthlyLimitHE != null && raw.monthlyLimitHE !== '') config.monthlyLimitHE = Number(raw.monthlyLimitHE);
+  if (raw.nightCutoff != null && raw.nightCutoff !== '') config.nightCutoff = String(raw.nightCutoff);
+  if (raw.percent50 != null && raw.percent50 !== '') config.percent50 = Number(raw.percent50);
+  if (raw.percent100 != null && raw.percent100 !== '') config.percent100 = Number(raw.percent100);
   if (raw.percentNight != null && raw.percentNight !== '') config.percentNight = Number(raw.percentNight);
   if (raw.cycleStartDay != null && raw.cycleStartDay !== '') config.cycleStartDay = clampCycleStartDay(raw.cycleStartDay);
   if (raw.roundingCarryover != null && raw.roundingCarryover !== '') config.roundingCarryover = Number(raw.roundingCarryover);
@@ -201,8 +205,12 @@ function normalizeCnpj(value: any): string {
 
 function buildDefaultCompanySettings(cnpj: string, name?: string): CompanySettingsProfile {
   const config: CompanyCalculationConfig = {
+    dailyJourney: 8,
     weeklyLimit: 3,
     monthlyLimitHE: 900,
+    nightCutoff: '22:00',
+    percent50: 50,
+    percent100: 100,
     percentNight: 25,
     cycleStartDay: 16,
   };

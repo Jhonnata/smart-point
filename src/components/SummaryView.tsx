@@ -4,10 +4,12 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { format, parseISO, isValid } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import {
+  analyzeDailyOvertimePreview,
   calculateOvertime,
   normalizeOvernightEntries,
-  resolveDelayMinutes,
+  resolveDailyShortfallMinutes,
   resolveDailyJourneyMinutes,
+  resolveEffectiveCalculationConfig,
   sumEntryWorkedMinutes,
   type Settings,
   type TimeEntry
@@ -31,10 +33,21 @@ interface Props {
 const WEEKDAY_ABBR = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'] as const;
 const hoursToMinutes = (hours: number) => Math.max(0, Math.round((Number.isFinite(hours) ? hours : 0) * 60));
 
+function formatRubricBadge(code?: string, label?: string): string {
+  const safeCode = String(code || '').trim();
+  const safeLabel = String(label || '').trim();
+  if (safeCode && safeLabel) return `${safeCode} - ${safeLabel}`;
+  if (safeCode) return safeCode;
+  if (safeLabel) return safeLabel;
+  return 'Rubrica nao configurada';
+}
+
 export default function SummaryView({ entries, normalEntries, overtimeEntries, settings, month, onSaveEntries, onUploadClick, disableSave }: Props) {
   const [activeView, setActiveView] = React.useState<'financeiro' | 'extras' | 'simulador' | 'lancamentos'>('financeiro');
   const [showDetails, setShowDetails] = React.useState(false);
   const cardEntries = React.useMemo(() => [...(normalEntries || []), ...(overtimeEntries || [])], [normalEntries, overtimeEntries]);
+  const rubrics = settings.companySettings?.rubrics;
+  const effectiveConfig = React.useMemo(() => resolveEffectiveCalculationConfig(settings), [settings]);
 
   const results = React.useMemo(() => {
     console.log("[DEBUG] SummaryView: entries=", entries?.length, "settings=", !!settings);
@@ -60,7 +73,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
 
         const dailyMinutes = sumEntryWorkedMinutes(entry);
         const journeyMin = resolveDailyJourneyMinutes(
-          settings.dailyJourney || 0,
+          effectiveConfig.dailyJourney,
           isOvertimeCard,
           date.getDay(),
           !!settings.saturdayCompensation,
@@ -69,26 +82,25 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
         
         if (!isOvertimeCard && !isSunday) {
           if (entry.isDPAnnotation) return;
-          const hasAnyMark = [entry.entry1, entry.exit1, entry.entry2, entry.exit2, entry.entryExtra, entry.exitExtra]
-            .some((value) => !!String(value || '').trim());
-          if (!hasAnyMark) {
-            totalAtrasoMinutes += journeyMin;
-          } else {
-            totalAtrasoMinutes += resolveDelayMinutes(entry, date.getDay(), {
-              workStart: settings.workStart,
-              saturdayWorkStart: settings.saturdayWorkStart,
-              saturdayCompensation: !!settings.saturdayCompensation,
-              toleranceMinutes: 5,
-            });
-          }
+          totalAtrasoMinutes += resolveDailyShortfallMinutes(entry, {
+            dailyJourneyHours: effectiveConfig.dailyJourney,
+            isOvertimeCardEntry: false,
+            dayOfWeek: date.getDay(),
+            saturdayCompensation: !!settings.saturdayCompensation,
+            compDaysRaw: settings.compDays,
+          });
         }
 
         // Armazenar para o gráfico/lista de HE detalhado
         if ((dailyMinutes > 0 || isSunday) && isOvertimeCard) {
+           const overtimePreview = analyzeDailyOvertimePreview(entry, settings);
            dailyDetails.push({
              date: entry.date,
              totalMinutes: dailyMinutes,
              journey: journeyMin,
+             overtimeRealMinutes: overtimePreview.dayOvertimeRealMinutes,
+             overtimeMinutes: overtimePreview.dayOvertimeMinutes,
+             discountMinutes: overtimePreview.discountRealMinutes,
              isSunday,
              entry
            });
@@ -124,16 +136,16 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
         he75: res.grandTotal75,
         he100: res.grandTotal100,
         he125: res.grandTotal125,
-        perc50: settings.percent50 || 50,
-        perc100: settings.percent100 || 100,
-        percNight: settings.percentNight || 25,
+        perc50: effectiveConfig.percent50 || 50,
+        perc100: effectiveConfig.percent100 || 100,
+        percNight: effectiveConfig.percentNight || 25,
         mes: payrollMonth,
         ano: payrollYear,
         atraso: totalAtrasoValue,
         dependentes: settings.dependentes || 0,
         adiantamentoPercent: settings.adiantamentoPercent || 45,
         adiantamentoPago: settings.adiantamentoIR ? { bruto: 0, irRetido: settings.adiantamentoIR } : null,
-        cycleStartDay: settings.cycleStartDay || 15,
+        cycleStartDay: effectiveConfig.cycleStartDay || 15,
         rubrics: settings.companySettings?.rubrics,
         companyConfig: settings.companySettings?.config,
         overtimeBuckets: res.overtimeBuckets,
@@ -145,7 +157,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
       console.error("Error in Summary calculations", err);
       return null;
     }
-  }, [entries, settings, month]);
+  }, [entries, settings, month, effectiveConfig]);
 
   const bancoHorasHours = React.useMemo(() => {
     if (!results) return '0h00';
@@ -466,26 +478,38 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
               <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-6">Taxas Aplicadas</h3>
               <div className="space-y-4">
                 <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
-                  <div className="text-[10px] font-bold text-zinc-400 uppercase mb-1">Adicional 1 ({settings.percent50}%)</div>
+                  <div className="text-[10px] font-bold text-zinc-400 uppercase mb-1">{String(rubrics?.HE_50?.label || 'HE 50%')}</div>
+                  <div className="text-[9px] font-medium text-zinc-400 mb-1">{effectiveConfig.percent50}%</div>
                   <div className="text-xl font-black text-zinc-900">{formatCurrency(results.rate50)}/h</div>
+                  <div className="mt-2 text-[10px] font-medium text-zinc-500">{formatRubricBadge(rubrics?.HE_50?.code, rubrics?.HE_50?.label)}</div>
                 </div>
                 <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
-                  <div className="text-[10px] font-bold text-zinc-400 uppercase mb-1">Adicional 2 ({settings.percent100}%)</div>
+                  <div className="text-[10px] font-bold text-zinc-400 uppercase mb-1">{String(rubrics?.HE_100?.label || 'HE 100%')}</div>
+                  <div className="text-[9px] font-medium text-zinc-400 mb-1">{effectiveConfig.percent100}%</div>
                   <div className="text-xl font-black text-zinc-900">{formatCurrency(results.rate100)}/h</div>
+                  <div className="mt-2 text-[10px] font-medium text-zinc-500">{formatRubricBadge(rubrics?.HE_100?.code, rubrics?.HE_100?.label)}</div>
                 </div>
                 <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
-                  <div className="text-[10px] font-bold text-zinc-400 uppercase mb-1">Adicional Noturno (+{settings.percentNight}%)</div>
-                  <div className="text-xl font-black text-zinc-900">+{formatCurrency(results.hourlyRate * (settings.percentNight / 100))}/h</div>
+                  <div className="text-[10px] font-bold text-zinc-400 uppercase mb-1">{String(rubrics?.ADIC_NOT?.label || 'Adicional Noturno')}</div>
+                  <div className="text-[9px] font-medium text-zinc-400 mb-1">+{effectiveConfig.percentNight}%</div>
+                  <div className="text-xl font-black text-zinc-900">+{formatCurrency(results.hourlyRate * (effectiveConfig.percentNight / 100))}/h</div>
+                  <div className="mt-2 text-[10px] font-medium text-zinc-500">{formatRubricBadge(rubrics?.ADIC_NOT?.code, rubrics?.ADIC_NOT?.label)}</div>
                 </div>
                 <div className="pt-4 mt-4 border-t border-zinc-100">
                   <div className="text-[10px] font-bold text-zinc-400 uppercase mb-2 italic">Composições de Noite:</div>
-                  <div className="flex justify-between text-xs font-medium text-zinc-600 mb-1">
-                    <span>50% + Noturno (75%)</span>
-                    <span className="font-bold">{formatCurrency(results.rate75)}/h</span>
+                  <div className="mb-2 rounded-xl border border-zinc-100 bg-zinc-50 px-3 py-2">
+                    <div className="flex justify-between text-xs font-medium text-zinc-600 mb-1">
+                      <span>50% + Noturno (75%)</span>
+                      <span className="font-bold">{formatCurrency(results.rate75)}/h</span>
+                    </div>
+                    <div className="text-[10px] font-medium text-zinc-500">{formatRubricBadge(rubrics?.HE_75?.code, rubrics?.HE_75?.label)}</div>
                   </div>
-                  <div className="flex justify-between text-xs font-medium text-zinc-600">
-                    <span>100% + Noturno (125%)</span>
-                    <span className="font-bold">{formatCurrency(results.rate125)}/h</span>
+                  <div className="rounded-xl border border-zinc-100 bg-zinc-50 px-3 py-2">
+                    <div className="flex justify-between text-xs font-medium text-zinc-600 mb-1">
+                      <span>100% + Noturno (125%)</span>
+                      <span className="font-bold">{formatCurrency(results.rate125)}/h</span>
+                    </div>
+                    <div className="text-[10px] font-medium text-zinc-500">{formatRubricBadge(rubrics?.HE_125?.code, rubrics?.HE_125?.label)}</div>
                   </div>
                 </div>
               </div>
@@ -510,7 +534,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
                       {results.dailyDetails.map((day: any, i: number) => {
                         const date = parseISO(day.date);
                         const isSunday = day.isSunday;
-                        const overtimeMin = isSunday ? day.totalMinutes : Math.max(0, day.totalMinutes - day.journey);
+                    const overtimeMin = Number(day.overtimeRealMinutes || 0);
 
                         // O detalhamento diario de HE deve exibir apenas o cartao de horas extras.
                         if (!day.entry?.isOvertimeCard) return null;

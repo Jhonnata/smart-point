@@ -5,8 +5,9 @@ import { ptBR } from 'date-fns/locale';
 import {
   calculateOvertime,
   normalizeOvernightEntries,
-  resolveDelayMinutes,
+  resolveDailyShortfallMinutes,
   resolveDailyJourneyMinutes,
+  resolveEffectiveCalculationConfig,
   type Settings,
   type TimeEntry
 } from '../lib/calculations';
@@ -44,6 +45,7 @@ export default function HolerithView({
 }: Props) {
   const data = React.useMemo(() => {
     if (!entries || entries.length === 0) return null;
+    const effectiveConfig = resolveEffectiveCalculationConfig(settings);
 
     const effectiveEntries = normalizeOvernightEntries(entries);
     const normals = normalizeOvernightEntries(normalEntries ?? effectiveEntries.filter(e => !e.isOvertimeCard));
@@ -58,7 +60,7 @@ export default function HolerithView({
       if (date.getDay() === 0) return;
 
       const journey = resolveDailyJourneyMinutes(
-        settings.dailyJourney || 0,
+        effectiveConfig.dailyJourney,
         !!entry.isOvertimeCard,
         date.getDay(),
         !!settings.saturdayCompensation,
@@ -66,18 +68,13 @@ export default function HolerithView({
       );
 
       if (entry.isDPAnnotation) return;
-      const hasAnyMark = [entry.entry1, entry.exit1, entry.entry2, entry.exit2, entry.entryExtra, entry.exitExtra]
-        .some((value) => !!String(value || '').trim());
-      if (!hasAnyMark) {
-        totalAtrasoMinutes += journey;
-      } else {
-        totalAtrasoMinutes += resolveDelayMinutes(entry, date.getDay(), {
-          workStart: settings.workStart,
-          saturdayWorkStart: settings.saturdayWorkStart,
-          saturdayCompensation: !!settings.saturdayCompensation,
-          toleranceMinutes: 5,
-        });
-      }
+      totalAtrasoMinutes += resolveDailyShortfallMinutes(entry, {
+        dailyJourneyHours: effectiveConfig.dailyJourney,
+        isOvertimeCardEntry: false,
+        dayOfWeek: date.getDay(),
+        saturdayCompensation: !!settings.saturdayCompensation,
+        compDaysRaw: settings.compDays,
+      });
     });
 
     const valorHora = (settings.baseSalary || 0) / (settings.monthlyHours || 1);
@@ -103,16 +100,16 @@ export default function HolerithView({
       he75: calc.grandTotal75,
       he100: calc.grandTotal100,
       he125: calc.grandTotal125,
-      perc50: settings.percent50 || 50,
-      perc100: settings.percent100 || 100,
-      percNight: settings.percentNight || 25,
+      perc50: effectiveConfig.percent50 || 50,
+      perc100: effectiveConfig.percent100 || 100,
+      percNight: effectiveConfig.percentNight || 25,
       mes: month,
       ano: year,
       atraso: atrasoValor,
       dependentes: settings.dependentes || 0,
       adiantamentoPercent: settings.adiantamentoPercent || 45,
       adiantamentoPago: settings.adiantamentoIR ? { bruto: 0, irRetido: settings.adiantamentoIR } : null,
-      cycleStartDay: settings.cycleStartDay || 15,
+      cycleStartDay: effectiveConfig.cycleStartDay || 15,
       rubrics: settings.companySettings?.rubrics,
       companyConfig: settings.companySettings?.config,
       overtimeBuckets: calc.overtimeBuckets,

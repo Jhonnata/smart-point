@@ -1,13 +1,22 @@
 import {
+  analyzeDailyOvertimePreview,
   runOvertimeEngine,
   resolveDailyOvertimeDiscountMinutes,
+  type DailyOvertimePreview,
   type OvertimeComputationResult
 } from './overtimeEngine';
 import {
+  convertNightRealMinutesToFinancial,
+  convertWorkedMinutesToFinancial,
+  getFirstEntryMinutes,
+  getLastExitInfo,
+  getWorkedMinuteSlices,
+  isNightMinute,
   minutesToTime,
   normalizeOvernightEntries,
   parseCompDays,
   resolveDelayMinutes,
+  resolveDailyShortfallMinutes,
   resolveDailyJourneyMinutes,
   resolveExpectedStartMinutes,
   sumEntryWorkedMinutes,
@@ -49,8 +58,12 @@ export interface CompanyDailyOvertimeDiscountRule {
 }
 
 export interface CompanyCalculationConfig {
+  dailyJourney?: number;
   weeklyLimit?: number;
   monthlyLimitHE?: number;
+  nightCutoff?: string;
+  percent50?: number;
+  percent100?: number;
   percentNight?: number;
   cycleStartDay?: number;
   roundingCarryover?: number;
@@ -174,7 +187,7 @@ export function buildSuggestedDailyOvertimeDiscountRules(): CompanyDailyOvertime
       label: 'Desconto diario HE faixa 2',
       rubricKey: 'DESC_HE_2',
       thresholdHours: 6,
-      discountMinutes: 60,
+      discountMinutes: 40,
       priority: 2,
       active: true,
     },
@@ -225,6 +238,18 @@ export interface Settings {
   companySettings?: CompanySettingsProfile | null;
 }
 
+export interface EffectiveCalculationConfig {
+  dailyJourney: number;
+  weeklyLimit: number;
+  monthlyLimitHE?: number;
+  nightCutoff: string;
+  percent50: number;
+  percent100: number;
+  percentNight: number;
+  cycleStartDay: number;
+  roundingCarryover: number;
+}
+
 export interface TimeEntry {
   id: string;
   date: string;
@@ -270,12 +295,21 @@ export interface WeeklySummary {
 }
 
 export type OvertimeCalculationResult = OvertimeComputationResult;
+export type DailyOvertimeAnalysis = DailyOvertimePreview;
 
 export {
+  analyzeDailyOvertimePreview,
+  convertNightRealMinutesToFinancial,
+  convertWorkedMinutesToFinancial,
+  getFirstEntryMinutes,
+  getLastExitInfo,
+  getWorkedMinuteSlices,
+  isNightMinute,
   minutesToTime,
   normalizeOvernightEntries,
   parseCompDays,
   resolveDelayMinutes,
+  resolveDailyShortfallMinutes,
   resolveDailyOvertimeDiscountMinutes,
   resolveDailyJourneyMinutes,
   resolveExpectedStartMinutes,
@@ -299,6 +333,21 @@ export function resolveWorkDateByCompetenciaDay(
     }
   }
   return `${year}-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
+}
+
+export function resolveEffectiveCalculationConfig(settings: Settings): EffectiveCalculationConfig {
+  const config = settings.companySettings?.config;
+  return {
+    dailyJourney: Number(config?.dailyJourney ?? settings.dailyJourney ?? 0),
+    weeklyLimit: Number(config?.weeklyLimit ?? settings.weeklyLimit ?? 0),
+    monthlyLimitHE: config?.monthlyLimitHE == null ? undefined : Number(config.monthlyLimitHE),
+    nightCutoff: String(config?.nightCutoff ?? settings.nightCutoff ?? '22:00'),
+    percent50: Number(config?.percent50 ?? settings.percent50 ?? 0),
+    percent100: Number(config?.percent100 ?? settings.percent100 ?? 0),
+    percentNight: Number(config?.percentNight ?? settings.percentNight ?? 0),
+    cycleStartDay: Number(config?.cycleStartDay ?? settings.cycleStartDay ?? 15),
+    roundingCarryover: Number(config?.roundingCarryover ?? 0),
+  };
 }
 
 export function calculateOvertime(entries: TimeEntry[], settings: Settings): OvertimeCalculationResult | null {

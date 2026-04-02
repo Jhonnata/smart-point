@@ -1,11 +1,11 @@
 import React from 'react';
-import { ArrowLeft, Save, Upload, Calendar, Clock, Info, MessageSquareMore } from 'lucide-react';
+import { ArrowLeft, Clipboard, Save, Upload, Calendar, Clock, Info, MessageSquareMore } from 'lucide-react';
 import { differenceInCalendarDays, parseISO, isValid } from 'date-fns';
 import { toast } from 'sonner';
 import {
+  analyzeDailyOvertimePreview,
   normalizeOvernightEntries,
-  resolveDailyJourneyMinutes,
-  resolveDailyOvertimeDiscountMinutes,
+  resolveEffectiveCalculationConfig,
   sumEntryWorkedMinutes,
   timeToMinutes,
   type TimeEntry,
@@ -137,27 +137,31 @@ function calcTotal(e: TimeEntry): string {
   return minutesToHHMM(min);
 }
 
-function resolveEntryDiscountMinutes(entry: TimeEntry, isOvertimeCardEntry: boolean, settings: Settings): number {
-  const workedMinutes = sumEntryWorkedMinutes(entry);
-  if (workedMinutes <= 0) return 0;
+function formatReferenceLabel(monthStr: string): string {
+  if (!monthStr) return '';
+  const [yearStr, monthStrNum] = monthStr.split('-');
+  const year = Number(yearStr);
+  const month = Number(monthStrNum);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return '';
+  return `${month.toString().padStart(2, '0')}/${year}`;
+}
 
-  const date = parseISO(entry.date);
-  if (!isValid(date)) return 0;
-  const dayOfWeek = date.getDay();
-  const journeyMinutes = resolveDailyJourneyMinutes(
-    settings.dailyJourney || 0,
-    isOvertimeCardEntry,
-    dayOfWeek,
-    !!settings.saturdayCompensation,
-    settings.compDays
-  );
-  const rawOvertimeMinutes = dayOfWeek === 0 ? workedMinutes : Math.max(0, workedMinutes - journeyMinutes);
-  return resolveDailyOvertimeDiscountMinutes(rawOvertimeMinutes, settings);
+function resolveWeeklyTargetMinutes(settings: Settings): number {
+  const weekdayMinutes = Math.max(0, Math.round((settings.dailyJourney || 0) * 60)) * 5;
+  if (settings.saturdayCompensation) return weekdayMinutes;
+
+  const saturdayStart = timeToMinutes(settings.saturdayWorkStart || '');
+  const saturdayEnd = timeToMinutes(settings.saturdayWorkEnd || '');
+  const saturdayMinutes = saturdayEnd > saturdayStart ? saturdayEnd - saturdayStart : 0;
+  const fallbackSaturdayMinutes = weekdayMinutes > 0 ? 4 * 60 : WEEK_TARGET_HOURS * 60;
+  return weekdayMinutes > 0 ? weekdayMinutes + (saturdayMinutes || fallbackSaturdayMinutes) : WEEK_TARGET_HOURS * 60;
 }
 
 export default function DualCardView({ entries, onSave, onBack, month, onUploadClick, settings, disableSave }: Props) {
   const monthStr = React.useMemo(() => month || (entries[0]?.date || '').substring(0, 7), [entries, month]);
-  const weeklyTargetMinutes = ((settings.weeklyLimit && settings.weeklyLimit > 0 ? settings.weeklyLimit : WEEK_TARGET_HOURS) * 60);
+  const effectiveConfig = React.useMemo(() => resolveEffectiveCalculationConfig(settings), [settings]);
+  const weeklyTargetMinutes = React.useMemo(() => resolveWeeklyTargetMinutes({ ...settings, dailyJourney: effectiveConfig.dailyJourney }), [settings, effectiveConfig.dailyJourney]);
+  const referenceLabel = React.useMemo(() => formatReferenceLabel(monthStr), [monthStr]);
   const competenciaPeriodLabel = React.useMemo(
     () => getCompetenciaPeriodLabel(monthStr, settings.cycleStartDay || 15),
     [monthStr, settings.cycleStartDay]
@@ -250,6 +254,45 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
     });
     onSave([...leftFinal, ...rightFinal]);
   };
+
+  const copyCardToClipboard = React.useCallback(async () => {
+    const currentList = activeCardTab === 'right' ? right : left;
+    const rows = currentList
+      .filter((row) => [row.entry1, row.exit1, row.entry2, row.exit2, row.entryExtra, row.exitExtra].some((value) => !!String(value || '').trim()))
+      .map((row) => {
+        const parsedDate = parseISO(row.date);
+        const dateLabel = isValid(parsedDate)
+          ? `${String(parsedDate.getDate()).padStart(2, '0')}/${String(parsedDate.getMonth() + 1).padStart(2, '0')}`
+          : String(row.day || '--');
+        return [
+          dateLabel,
+          row.entry1 || '-',
+          row.exit1 || '-',
+          row.entry2 || '-',
+          row.exit2 || '-',
+        ].join('\t');
+      });
+
+    if (rows.length === 0) {
+      toast.error('Nao ha dias preenchidos para copiar.');
+      return;
+    }
+
+    const output = [
+      '-------------------------------------',
+      `MES REFERENCIA ${referenceLabel || '--/----'}`,
+      '-------------------------------------',
+      ...rows,
+      '---------------------------------------',
+    ].join('\n');
+
+    try {
+      await navigator.clipboard.writeText(output);
+      toast.success(`Cartao ${activeCardTab === 'right' ? 'extra' : 'normal'} copiado.`);
+    } catch {
+      toast.error('Falha ao copiar para a area de transferencia.');
+    }
+  }, [activeCardTab, left, referenceLabel, right]);
 
   const onEdit = (side: 'left' | 'right', id: string, field: keyof TimeEntry, value: string) => {
     if (side === 'left') {
@@ -438,8 +481,17 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
               list.forEach((e, idx) => {
                 const normalizedEntry = normalizedByDay.get(e.day || '') || e;
                 const isOvertimeCardEntry = side === 'right';
-                const discountMinutes = resolveEntryDiscountMinutes(normalizedEntry, isOvertimeCardEntry, settings);
+                const overtimePreview = analyzeDailyOvertimePreview(
+                  { ...normalizedEntry, isOvertimeCard: isOvertimeCardEntry },
+                  settings
+                );
+                const discountMinutes = overtimePreview.discountRealMinutes;
                 const discountLabel = formatDiscountLabel(discountMinutes);
+                const displayedTotalMinutes = isOvertimeCardEntry
+                  ? overtimePreview.dayOvertimeRealMinutes
+                  : overtimePreview.workedMinutes;
+                const displayedTotal = displayedTotalMinutes > 0 ? minutesToHHMM(displayedTotalMinutes) : '';
+                const grossTotal = calcTotal(normalizedEntry);
                 const date = parseISO(e.date);
                 const validDate = isValid(date);
                 const dayOfWeek = validDate ? date.getDay() : -1;
@@ -509,14 +561,14 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
                     {renderTimeCell(e, side, 'entryExtra')}
                     {renderTimeCell(e, side, 'exitExtra', true)}
                     <td className="w-[64px] px-2 py-0.5 text-right">
-                      {calcTotal(normalizedEntry) ? (
+                      {displayedTotal ? (
                         <span className="inline-flex items-center justify-end gap-1 text-[10px] font-black text-zinc-950">
-                          {calcTotal(normalizedEntry)}
+                          {displayedTotal}
                           {side === 'right' && discountMinutes > 0 && (
                             <span
                               className="inline-flex items-center text-amber-600"
-                              title={`Desconto diario aplicado: ${discountLabel}`}
-                              aria-label={`Desconto diario aplicado: ${discountLabel}`}
+                              title={`Desconto diario aplicado: ${discountLabel}. Bruto: ${grossTotal}`}
+                              aria-label={`Desconto diario aplicado: ${discountLabel}. Bruto: ${grossTotal}`}
                             >
                               <Info className="h-3.5 w-3.5" />
                             </span>
@@ -641,6 +693,15 @@ export default function DualCardView({ entries, onSave, onBack, month, onUploadC
                 Cartão Extra
               </button>
             </div>
+
+            <button
+              type="button"
+              onClick={copyCardToClipboard}
+              className="inline-flex items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white px-5 py-3 text-sm font-bold text-zinc-700 transition-all hover:bg-zinc-50"
+            >
+              <Clipboard className="h-4 w-4" />
+              Copiar cartao
+            </button>
 
             <button
               onClick={commit}

@@ -31,8 +31,12 @@ type TabId = 'ia' | 'funcionario' | 'empresa';
 function cloneCompanySettings(settings: Settings, company?: CompanySettingsProfile | null): CompanySettingsProfile {
   const suggestedRubrics = buildSuggestedCompanyRubrics();
   const baseConfig = {
+    dailyJourney: company?.config?.dailyJourney ?? settings.dailyJourney,
     weeklyLimit: company?.config?.weeklyLimit,
     monthlyLimitHE: company?.config?.monthlyLimitHE,
+    nightCutoff: company?.config?.nightCutoff ?? settings.nightCutoff,
+    percent50: company?.config?.percent50 ?? settings.percent50,
+    percent100: company?.config?.percent100 ?? settings.percent100,
     percentNight: company?.config?.percentNight,
     cycleStartDay: company?.config?.cycleStartDay,
   };
@@ -204,6 +208,19 @@ export default function SettingsView({ settings, onSave }: Props) {
         [field]: value,
       },
     }));
+    const legacyFieldMap: Partial<Record<string, keyof Settings>> = {
+      dailyJourney: 'dailyJourney',
+      weeklyLimit: 'weeklyLimit',
+      nightCutoff: 'nightCutoff',
+      percent50: 'percent50',
+      percent100: 'percent100',
+      percentNight: 'percentNight',
+      cycleStartDay: 'cycleStartDay',
+    };
+    const legacyField = legacyFieldMap[field];
+    if (legacyField) {
+      setLocalSettings((prev) => ({ ...prev, [legacyField]: value }));
+    }
   }, [updateCompanySettings]);
 
   const handleRubricChange = React.useCallback((rubricKey: string, field: 'code' | 'label', value: string) => {
@@ -542,7 +559,7 @@ export default function SettingsView({ settings, onSave }: Props) {
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-semibold text-zinc-700">Jornada Diaria (horas)</label>
-                  <input type="number" value={localSettings.dailyJourney} onChange={(e) => handleChange('dailyJourney', Number(e.target.value))} className="w-full rounded-xl border border-zinc-200 px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" />
+                  <input type="number" value={companySettings.config.dailyJourney ?? localSettings.dailyJourney} onChange={(e) => handleCompanyConfigChange('dailyJourney', Number(e.target.value))} className="w-full rounded-xl border border-zinc-200 px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" />
                 </div>
               </div>
 
@@ -652,6 +669,14 @@ export default function SettingsView({ settings, onSave }: Props) {
 
               <div className="grid grid-cols-1 gap-4 rounded-[2rem] border border-zinc-100 bg-zinc-50/50 p-6 md:grid-cols-4">
                 <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase text-zinc-500">HE 50 (%)</label>
+                  <input type="number" value={companySettings.config.percent50 ?? localSettings.percent50 ?? ''} onChange={(e) => handleCompanyConfigChange('percent50', Number(e.target.value))} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold uppercase text-zinc-500">HE 100 (%)</label>
+                  <input type="number" value={companySettings.config.percent100 ?? localSettings.percent100 ?? ''} onChange={(e) => handleCompanyConfigChange('percent100', Number(e.target.value))} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm" />
+                </div>
+                <div className="space-y-2">
                   <label className="text-xs font-bold uppercase text-zinc-500">Limite semanal</label>
                   <input type="number" value={companySettings.config.weeklyLimit ?? ''} onChange={(e) => handleCompanyConfigChange('weeklyLimit', Number(e.target.value))} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm" placeholder="min" />
                 </div>
@@ -669,7 +694,7 @@ export default function SettingsView({ settings, onSave }: Props) {
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-bold uppercase text-zinc-500">Inicio adicional noturno</label>
-                  <input type="text" value={localSettings.nightCutoff || ''} onChange={(e) => handleChange('nightCutoff', e.target.value)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm" placeholder="Ex: 22:00" />
+                  <input type="text" value={companySettings.config.nightCutoff ?? localSettings.nightCutoff ?? ''} onChange={(e) => handleCompanyConfigChange('nightCutoff', e.target.value)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm" placeholder="Ex: 22:00" />
                 </div>
               </div>
 

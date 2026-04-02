@@ -1,6 +1,7 @@
 import { isValid, parseISO } from 'date-fns';
 import {
   minutesToTime,
+  resolveEffectiveCalculationConfig,
   resolveWorkDateByCompetenciaDay,
   sumEntryWorkedMinutes,
   timeToMinutes,
@@ -147,11 +148,12 @@ function addMinuteToSlot(slot: SlotPlan, minute: number) {
 }
 
 function buildDayPlans(rows: CardRow[], settings: Settings): DayPlan[] {
+  const effectiveConfig = resolveEffectiveCalculationConfig(settings);
   const workStartMin = timeToMinutes(settings.workStart || '12:00');
   const workEndMin = timeToMinutes(settings.workEnd || '21:00');
   const saturdayStartMin = timeToMinutes(settings.saturdayWorkStart || '12:00');
   const saturdayEndMin = timeToMinutes(settings.saturdayWorkEnd || '16:00');
-  const nightStartMin = Math.max(0, timeToMinutes(settings.nightCutoff || '22:00'));
+  const nightStartMin = Math.max(0, timeToMinutes(effectiveConfig.nightCutoff || '22:00'));
   const compDays = parseCompDays(settings.compDays);
 
   return rows
@@ -329,7 +331,7 @@ export function buildProjectedCardFromHolerith(params: {
   const [yearStr, monthStr] = referenceMonth.split('-');
   const referenceYear = Number(yearStr);
   const referenceMonthNumber = Number(monthStr);
-  const cycleStartDay = settings.cycleStartDay || 15;
+  const cycleStartDay = resolveEffectiveCalculationConfig(settings).cycleStartDay || 15;
 
   const warnings: string[] = [];
   const normalRows: CardRow[] = [];
@@ -393,8 +395,9 @@ export function buildProjectedCardFromHolerith(params: {
 
   const dayPlans = buildDayPlans(overtimeRows, settings).sort((a, b) => a.row.date.localeCompare(b.row.date));
   const weekAccumulator = new Map<string, number>();
-  const weeklyLimitMinutes = Math.max(0, Math.round((settings.weeklyLimit || 0) * 60));
-  const nightCutoffMinutes = Math.max(0, timeToMinutes(settings.nightCutoff || '22:00'));
+  const effectiveConfig = resolveEffectiveCalculationConfig(settings);
+  const weeklyLimitMinutes = Math.max(0, Math.round((effectiveConfig.weeklyLimit || 0) * 60));
+  const nightCutoffMinutes = Math.max(0, timeToMinutes(effectiveConfig.nightCutoff || '22:00'));
 
   // Sunday minutes do not consume weekly limit in the current overtime rules.
   const sunday125 = allocateTypeMinutes({

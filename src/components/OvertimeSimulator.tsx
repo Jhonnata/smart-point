@@ -3,7 +3,7 @@ import { parseISO, isValid } from 'date-fns';
 import { Calculator, Loader2, Save, WandSparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Settings, TimeEntry } from '../lib/calculations';
-import { resolveWorkDateByCompetenciaDay, timeToMinutes } from '../lib/calculations';
+import { resolveEffectiveCalculationConfig, resolveWorkDateByCompetenciaDay, timeToMinutes } from '../lib/calculations';
 import { apiFetch } from '../lib/api';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { getSimulatorPlan, saveSimulatorPlan } from '../lib/supabaseData';
@@ -218,13 +218,14 @@ function mergeRows(baseRows: PlanRow[], savedRows?: PlanRow[]): PlanRow[] {
 }
 
 export default function OvertimeSimulator({ entries, settings, month }: Props) {
+  const effectiveConfig = React.useMemo(() => resolveEffectiveCalculationConfig(settings), [settings]);
   const hourlyRate = (settings.baseSalary || 0) / (settings.monthlyHours || 1);
   const rates = React.useMemo(() => ({
-    '50': hourlyRate * (1 + (settings.percent50 || 0) / 100),
-    '75': hourlyRate * (1 + ((settings.percent50 || 0) + (settings.percentNight || 0)) / 100),
-    '100': hourlyRate * (1 + (settings.percent100 || 0) / 100),
-    '125': hourlyRate * (1 + ((settings.percent100 || 0) + (settings.percentNight || 0)) / 100),
-  }), [hourlyRate, settings.percent50, settings.percent100, settings.percentNight]);
+    '50': hourlyRate * (1 + (effectiveConfig.percent50 || 0) / 100),
+    '75': hourlyRate * (1 + ((effectiveConfig.percent50 || 0) + (effectiveConfig.percentNight || 0)) / 100),
+    '100': hourlyRate * (1 + (effectiveConfig.percent100 || 0) / 100),
+    '125': hourlyRate * (1 + ((effectiveConfig.percent100 || 0) + (effectiveConfig.percentNight || 0)) / 100),
+  }), [hourlyRate, effectiveConfig.percent50, effectiveConfig.percent100, effectiveConfig.percentNight]);
 
   const [targetValueInput, setTargetValueInput] = React.useState('');
   const [rateMode, setRateMode] = React.useState<RateMode>('auto');
@@ -258,7 +259,7 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
     const [yearStr, monthStr] = referenceMonth.split('-');
     const refYear = Number(yearStr);
     const refMonth = Number(monthStr);
-    const cycle = settings.cycleStartDay || 15;
+    const cycle = effectiveConfig.cycleStartDay || 15;
     const byDay: Record<string, TimeEntry> = {};
     entries.filter((e) => !!e.isOvertimeCard).forEach((e) => {
       const d = e.day || (e.date || '').slice(8, 10);
@@ -286,7 +287,7 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
       });
     }
     return out;
-  }, [entries, referenceMonth, settings.cycleStartDay]);
+  }, [entries, referenceMonth, effectiveConfig.cycleStartDay]);
 
   const [rows, setRows] = React.useState<PlanRow[]>(initialRows);
 
@@ -335,7 +336,7 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
     return () => { cancelled = true; };
   }, [initialRows, reference]);
 
-  const nightCutoffMinutes = timeToMinutes(settings.nightCutoff || '22:00');
+  const nightCutoffMinutes = timeToMinutes(effectiveConfig.nightCutoff || '22:00');
   const targetValue = parseMoneyInput(targetValueInput);
   const parsedCompDays = React.useMemo(
     () => (settings.compDays || '1,2,3,4')

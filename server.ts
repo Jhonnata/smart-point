@@ -885,13 +885,10 @@ function recomputeBancoHorasForHolerith(
     } else {
       if (total > curJourney) {
         insBH.run(holerithId, dateStr, total - curJourney, "extra", "Excedente cartao normal");
-      } else if (!hasAnyMark && curJourney > 0) {
+      } else if (curJourney > 0 && !hasAnyMark) {
         insBH.run(holerithId, dateStr, curJourney, "atraso", "Falta cartao normal");
-      } else {
-        const delayMinutes = calcDelayMinutes(row, dayOfWeek, workStart, saturdayWorkStart, hasSatComp);
-        if (delayMinutes > 0) {
-          insBH.run(holerithId, dateStr, delayMinutes, "atraso", "Atraso cartao normal");
-        }
+      } else if (curJourney > 0 && total < curJourney) {
+        insBH.run(holerithId, dateStr, curJourney - total, "atraso", "Atraso cartao normal");
       }
     }
   }

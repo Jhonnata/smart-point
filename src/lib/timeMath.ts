@@ -19,7 +19,18 @@ export interface DelayComputationOptions {
   toleranceMinutes?: number;
 }
 
+export interface DailyShortfallOptions {
+  dailyJourneyHours: number;
+  isOvertimeCardEntry: boolean;
+  dayOfWeek: number;
+  saturdayCompensation?: boolean;
+  compDaysRaw?: string;
+}
+
 const CLOCK_RX = /^\d{1,2}:\d{2}$/;
+export const NIGHT_START_MINUTES = 22 * 60;
+export const NIGHT_END_MINUTES = 5 * 60;
+export const NIGHT_REDUCED_FACTOR = 60 / 52.5;
 
 export function normalizeClock(value: unknown): string {
   const str = String(value ?? '').trim();
@@ -122,6 +133,100 @@ export function resolveDailyJourneyMinutes(
   return journey;
 }
 
+export function isNightMinute(
+  minuteOfDay: number,
+  nightStartMinutes: number = NIGHT_START_MINUTES,
+  nightEndMinutes: number = NIGHT_END_MINUTES
+): boolean {
+  if (nightStartMinutes === nightEndMinutes) return true;
+  if (nightStartMinutes < nightEndMinutes) {
+    return minuteOfDay >= nightStartMinutes && minuteOfDay < nightEndMinutes;
+  }
+  return minuteOfDay >= nightStartMinutes || minuteOfDay < nightEndMinutes;
+}
+
+export function convertNightRealMinutesToFinancial(realMinutes: number): number {
+  return Math.max(0, realMinutes) * NIGHT_REDUCED_FACTOR;
+}
+
+export function convertWorkedMinutesToFinancial(realMinutes: number, night: boolean): number {
+  return night ? convertNightRealMinutesToFinancial(realMinutes) : Math.max(0, realMinutes);
+}
+
+export interface WorkedMinuteSlice {
+  minuteOfDay: number;
+  absoluteMinute: number;
+  isNight: boolean;
+  financialMinutes: number;
+}
+
+export function getWorkedMinuteSlices(
+  entry: PunchEntryLike,
+  nightStartMinutes: number = NIGHT_START_MINUTES,
+  nightEndMinutes: number = NIGHT_END_MINUTES
+): WorkedMinuteSlice[] {
+  const slices: WorkedMinuteSlice[] = [];
+  let dayOffsetMinutes = 0;
+
+  for (const [start, end] of periodsFromEntry(entry)) {
+    const normalizedStart = normalizeClock(start);
+    const normalizedEnd = normalizeClock(end);
+    if (!normalizedStart || !normalizedEnd) continue;
+
+    const startMinutes = timeToMinutes(normalizedStart);
+    const endMinutes = timeToMinutes(normalizedEnd);
+    let duration = endMinutes - startMinutes;
+    if (duration < 0) duration += 24 * 60;
+    if (duration <= 0) continue;
+
+    for (let offset = 0; offset < duration; offset++) {
+      const absoluteMinute = dayOffsetMinutes + startMinutes + offset;
+      const minuteOfDay = ((absoluteMinute % (24 * 60)) + (24 * 60)) % (24 * 60);
+      const night = isNightMinute(minuteOfDay, nightStartMinutes, nightEndMinutes);
+      slices.push({
+        minuteOfDay,
+        absoluteMinute,
+        isNight: night,
+        financialMinutes: convertWorkedMinutesToFinancial(1, night),
+      });
+    }
+
+    if (endMinutes < startMinutes) {
+      dayOffsetMinutes += 24 * 60;
+    }
+  }
+
+  return slices;
+}
+
+export function getFirstEntryMinutes(entry: PunchEntryLike): number | null {
+  const firstStart = periodsFromEntry(entry)
+    .map(([start]) => normalizeClock(start))
+    .find(Boolean);
+  if (!firstStart) return null;
+  return timeToMinutes(firstStart);
+}
+
+export function getLastExitInfo(entry: PunchEntryLike): { minuteOfDay: number; dayOffset: number } | null {
+  const periods = periodsFromEntry(entry).filter(([start, end]) => !!normalizeClock(start) && !!normalizeClock(end));
+  if (periods.length === 0) return null;
+
+  let dayOffset = 0;
+  let result: { minuteOfDay: number; dayOffset: number } | null = null;
+  for (const [start, end] of periods) {
+    const startMinutes = timeToMinutes(start);
+    const endMinutes = timeToMinutes(end);
+    const exitDayOffset = dayOffset + (endMinutes < startMinutes ? 1 : 0);
+    result = {
+      minuteOfDay: endMinutes,
+      dayOffset: exitDayOffset,
+    };
+    if (endMinutes < startMinutes) dayOffset += 1;
+  }
+
+  return result;
+}
+
 export function resolveExpectedStartMinutes(
   dayOfWeek: number,
   options?: DelayComputationOptions
@@ -150,6 +255,28 @@ export function resolveDelayMinutes(
   const firstStartMinutes = timeToMinutes(firstStart);
   if (firstStartMinutes <= expectedStartMinutes + toleranceMinutes) return 0;
   return Math.max(0, firstStartMinutes - expectedStartMinutes);
+}
+
+export function resolveDailyShortfallMinutes(
+  entry: PunchEntryLike,
+  options: DailyShortfallOptions
+): number {
+  const journeyMinutes = resolveDailyJourneyMinutes(
+    options.dailyJourneyHours,
+    options.isOvertimeCardEntry,
+    options.dayOfWeek,
+    options.saturdayCompensation,
+    options.compDaysRaw
+  );
+  if (journeyMinutes <= 0) return 0;
+
+  const hasAnyMark = periodsFromEntry(entry).some(([start, end]) => !!normalizeClock(start) || !!normalizeClock(end));
+  if (!hasAnyMark) return journeyMinutes;
+
+  const workedMinutes = sumEntryWorkedMinutes(entry);
+  if (workedMinutes <= 0) return journeyMinutes;
+  if (workedMinutes >= journeyMinutes) return 0;
+  return Math.max(0, journeyMinutes - workedMinutes);
 }
 
 export function normalizeOvernightEntries<T extends DatedPunchEntryLike>(entries: T[]): T[] {

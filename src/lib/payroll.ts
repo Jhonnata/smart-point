@@ -1,4 +1,4 @@
-import type { CompanyCalculationConfig, CompanyRubricKey, CompanyRubricMap } from './calculations';
+import type { CompanyCalculationConfig, CompanyRubricKey, CompanyRubricMap, Settings } from './calculations';
 
 // ---------------------------------------------------------
 //  FERIADOS FIXOS DO BRASIL
@@ -188,6 +188,16 @@ function buildEffectiveRubrics(rubrics?: Partial<CompanyRubricMap>): CompanyRubr
   return output;
 }
 
+function buildEffectiveCompanyConfig(companyConfig: Partial<CompanyCalculationConfig>, legacy?: Partial<Settings>) {
+  return {
+    cycleStartDay: Number(companyConfig.cycleStartDay ?? legacy?.cycleStartDay ?? 1),
+    percent50: Number(companyConfig.percent50 ?? legacy?.percent50 ?? 0),
+    percent100: Number(companyConfig.percent100 ?? legacy?.percent100 ?? 0),
+    percentNight: Number(companyConfig.percentNight ?? legacy?.percentNight ?? 0),
+    roundingCarryover: Number(companyConfig.roundingCarryover ?? 0),
+  };
+}
+
 export function calcularHoleriteCompleto({
   salarioBase,
   horasMensais,
@@ -213,9 +223,17 @@ export function calcularHoleriteCompleto({
   discountBuckets = []
 }: PayrollParams) {
   const effectiveRubrics = buildEffectiveRubrics(rubrics);
-  const effectiveCycleStartDay = Number(companyConfig.cycleStartDay ?? cycleStartDay);
-  const effectivePercentNight = Number(companyConfig.percentNight ?? percNight);
-  const previousRoundingCarryover = Math.max(0, Number(companyConfig.roundingCarryover ?? roundingCarryover ?? 0));
+  const effectiveConfig = buildEffectiveCompanyConfig(companyConfig, {
+    cycleStartDay,
+    percent50: perc50,
+    percent100: perc100,
+    percentNight: percNight,
+  } as Partial<Settings>);
+  const effectiveCycleStartDay = effectiveConfig.cycleStartDay;
+  const effectivePercentNight = effectiveConfig.percentNight;
+  const effectivePercent50 = effectiveConfig.percent50;
+  const effectivePercent100 = effectiveConfig.percent100;
+  const previousRoundingCarryover = Math.max(0, Number(effectiveConfig.roundingCarryover ?? roundingCarryover ?? 0));
   // 1) Dias úteis e domingos/feriados
   const { diasUteis, domingosEFeriados, feriados } = getDiasUteisEDomingos(mes, ano, effectiveCycleStartDay);
 
@@ -226,8 +244,8 @@ export function calcularHoleriteCompleto({
   // Novas regras solicitadas:
   // HE 75% = HE 50% + Adicional Noturno
   // HE 125% = HE 100% + Adicional Noturno
-  const rate50 = valorHora * (1 + perc50 / 100);
-  const rate100 = valorHora * (1 + perc100 / 100);
+  const rate50 = valorHora * (1 + effectivePercent50 / 100);
+  const rate100 = valorHora * (1 + effectivePercent100 / 100);
   const rate75 = rate50 * (1 + effectivePercentNight / 100);
   const rate125 = rate100 * (1 + effectivePercentNight / 100);
 

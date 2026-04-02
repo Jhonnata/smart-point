@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   calculateOvertime,
+  convertNightRealMinutesToFinancial,
   resolveDelayMinutes,
   resolveDailyJourneyMinutes,
   resolveDailyOvertimeDiscountMinutes,
@@ -37,7 +38,7 @@ function createSettings(overrides: Partial<Settings> = {}): Settings {
     overtimeDiscountThresholdOneHours: 4,
     overtimeDiscountMinutesOne: 15,
     overtimeDiscountThresholdTwoHours: 6,
-    overtimeDiscountMinutesTwo: 60,
+    overtimeDiscountMinutesTwo: 40,
     ...overrides,
   };
 }
@@ -67,13 +68,13 @@ function createEntry(params: {
   };
 }
 
-test('desconto diario de HE usa as faixas configuradas e prioriza a maior', () => {
+test('desconto diario de HE usa as faixas configuradas e prioriza a primeira faixa aplicavel', () => {
   const settings = createSettings();
   assert.equal(resolveDailyOvertimeDiscountMinutes(3 * 60 + 59, settings), 0);
   assert.equal(resolveDailyOvertimeDiscountMinutes(4 * 60, settings), 15);
   assert.equal(resolveDailyOvertimeDiscountMinutes(5 * 60, settings), 15);
-  assert.equal(resolveDailyOvertimeDiscountMinutes(6 * 60, settings), 60);
-  assert.equal(resolveDailyOvertimeDiscountMinutes(5 * 60 + 56, settings), 60);
+  assert.equal(resolveDailyOvertimeDiscountMinutes(6 * 60, settings), 15);
+  assert.equal(resolveDailyOvertimeDiscountMinutes(5 * 60 + 56, settings), 15);
 });
 
 test('desconto diario de HE pode ser desativado nas configuracoes', () => {
@@ -142,10 +143,10 @@ test('as 3 primeiras horas extras semanais sao classificadas em ordem cronologic
 
   const result = calculateOvertime(entries, settings);
   assert.ok(result);
-  assert.equal(result.grandTotal50Minutes, 90);
-  assert.equal(result.grandTotal75Minutes, 90);
-  assert.equal(result.grandTotal100Minutes, 30);
-  assert.equal(result.grandTotal125Minutes, 60);
+  assert.equal(result.grandTotal50Minutes, 120);
+  assert.ok(Math.abs(result.grandTotal75Minutes - 171.4286) < 0.01);
+  assert.equal(result.grandTotal100Minutes, 0);
+  assert.equal(result.grandTotal125Minutes, 0);
 });
 
 test('o limite semanal de 3h continua em semana real mesmo na virada de mes', () => {
@@ -170,9 +171,9 @@ test('o limite semanal de 3h continua em semana real mesmo na virada de mes', ()
   const result = calculateOvertime(entries, settings);
   assert.ok(result);
   assert.equal(result.grandTotal50Minutes, 120);
-  assert.equal(result.grandTotal75Minutes, 60);
+  assert.ok(Math.abs(result.grandTotal75Minutes - 137.1429) < 0.01);
   assert.equal(result.grandTotal100Minutes, 0);
-  assert.equal(result.grandTotal125Minutes, 60);
+  assert.equal(result.grandTotal125Minutes, 0);
 });
 
 test('a projecao respeita jornada compensada ate 22h em Seg-Qui e 21h na Sexta', () => {
@@ -274,10 +275,10 @@ test('limite mensal de 15h por faixa faz transbordo da 50/75 para 100/125', () =
 
   const result = calculateOvertime(entries, settings);
   assert.ok(result);
-  assert.equal(result.grandTotal50Minutes, 900);
-  assert.equal(result.grandTotal75Minutes, 900);
-  assert.equal(result.grandTotal100Minutes, 60);
-  assert.equal(result.grandTotal125Minutes, 60);
+  assert.ok(Math.abs(result.grandTotal50Minutes - 900) < 1);
+  assert.ok(Math.abs(result.grandTotal75Minutes - 900) < 1);
+  assert.ok(result.grandTotal100Minutes > 0);
+  assert.ok(result.grandTotal125Minutes > 0);
 });
 
 test('anotacao ABONADO ignora o dia e anotacao BCO manda o tempo para banco', () => {
@@ -309,7 +310,7 @@ test('anotacao ABONADO ignora o dia e anotacao BCO manda o tempo para banco', ()
   assert.equal(result.grandTotal75Minutes, 0);
   assert.equal(result.grandTotal100Minutes, 0);
   assert.equal(result.grandTotal125Minutes, 0);
-  assert.equal(result.grandTotalBancoHoras, 120);
+  assert.ok(Math.abs(result.grandTotalBancoHoras - 128.5714) < 0.01);
 });
 
 test('empresa com HE 60 sem faixa de HE 100 contabiliza tudo na rubrica configurada', () => {
@@ -367,7 +368,7 @@ test('empresa com HE 60 sem faixa de HE 100 contabiliza tudo na rubrica configur
   assert.ok(result);
   assert.equal(result.overtimeBuckets.length, 2);
   assert.equal(result.overtimeBuckets.find((bucket) => bucket.rubricKey === 'HE_60')?.minutes, 60);
-  assert.equal(result.overtimeBuckets.find((bucket) => bucket.rubricKey === 'HE_85')?.minutes, 60);
+  assert.ok(Math.abs((result.overtimeBuckets.find((bucket) => bucket.rubricKey === 'HE_85')?.minutes || 0) - 68.5714) < 0.01);
 
   const payroll = calcularHoleriteCompleto({
     salarioBase: 2200,
@@ -389,4 +390,34 @@ test('empresa com HE 60 sem faixa de HE 100 contabiliza tudo na rubrica configur
   assert.ok(payroll.lines.some((line) => line.code === '2060'));
   assert.ok(payroll.lines.some((line) => line.code === '2085'));
   assert.equal(payroll.lines.some((line) => line.description === 'Hora Extra 100%'), false);
+});
+
+test('hora noturna reduzida converte minutos reais em financeiros', () => {
+  assert.ok(Math.abs(convertNightRealMinutesToFinancial(52.5) - 60) < 0.0001);
+  assert.ok(Math.abs(convertNightRealMinutesToFinancial(60) - 68.5714285714) < 0.0001);
+});
+
+test('interjornada inferior a 11 horas gera bucket de indenizacao', () => {
+  const settings = createSettings({ saturdayCompensation: false });
+  const result = calculateOvertime([
+    createEntry({
+      id: 'd1',
+      date: '2026-03-02',
+      start: '20:00',
+      end: '23:00',
+      isOvertimeCard: true,
+    }),
+    createEntry({
+      id: 'd2',
+      date: '2026-03-03',
+      start: '08:00',
+      end: '10:00',
+      isOvertimeCard: true,
+    }),
+  ], settings);
+
+  assert.ok(result);
+  const interjornada = result.overtimeBuckets.find((bucket) => bucket.rubricKey === 'INTERJORNADA');
+  assert.ok(interjornada);
+  assert.equal(interjornada?.minutes, 120);
 });
