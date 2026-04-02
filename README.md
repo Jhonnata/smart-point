@@ -26,6 +26,6 @@ View your app in AI Studio: https://ai.studio/apps/f752c6a4-f1ac-4c58-b148-115bb
 
 ## Supabase Status
 
-- `login`, `cadastro`, `sessao` e `recuperacao de senha` ja podem usar Supabase Auth no frontend.
-- `settings`, `holeriths`, `referencia`, `banco-horas` e `simulator-plan` ainda dependem da API Express/SQLite.
-- Para remover de vez a API no GitHub Pages, o proximo passo e migrar essas rotas para tabelas/RLS e consultas no Supabase.
+- `login`, `cadastro`, `sessao`, `recuperacao de senha`, `settings`, `holeriths`, `referencia` e `simulator-plan` devem usar Supabase no frontend.
+- O app nao deve mais fazer fallback automatico para a API/SQLite quando o objetivo for carregar ou salvar dados de negocio.
+- Configure `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` para usar o sistema.

@@ -118,6 +118,18 @@ function normalizeCompanyRubrics(value: any): CompanyRubricMap {
 function normalizeCompanyConfig(value: any): CompanyCalculationConfig {
   const raw = value && typeof value === 'object' ? value : {};
   const config: CompanyCalculationConfig = {};
+  const normalizeHolidayList = (input: unknown): string[] => {
+    const tokens = Array.isArray(input)
+      ? input
+      : typeof input === 'string'
+        ? input.split(/[\r\n,;]+/)
+        : [];
+    return Array.from(new Set(
+      tokens
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    ));
+  };
   if (raw.dailyJourney != null && raw.dailyJourney !== '') config.dailyJourney = Number(raw.dailyJourney);
   if (raw.weeklyLimit != null && raw.weeklyLimit !== '') config.weeklyLimit = Number(raw.weeklyLimit);
   if (raw.monthlyLimitHE != null && raw.monthlyLimitHE !== '') config.monthlyLimitHE = Number(raw.monthlyLimitHE);
@@ -127,6 +139,9 @@ function normalizeCompanyConfig(value: any): CompanyCalculationConfig {
   if (raw.percentNight != null && raw.percentNight !== '') config.percentNight = Number(raw.percentNight);
   if (raw.cycleStartDay != null && raw.cycleStartDay !== '') config.cycleStartDay = clampCycleStartDay(raw.cycleStartDay);
   if (raw.roundingCarryover != null && raw.roundingCarryover !== '') config.roundingCarryover = Number(raw.roundingCarryover);
+  if (Array.isArray(raw.customHolidays) || typeof raw.customHolidays === 'string') {
+    config.customHolidays = normalizeHolidayList(raw.customHolidays);
+  }
   if (Array.isArray(raw.overtimeRules)) {
     config.overtimeRules = raw.overtimeRules
       .filter((rule: any) => rule && typeof rule === 'object')

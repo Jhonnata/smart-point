@@ -112,6 +112,7 @@ export default function HolerithView({
       cycleStartDay: effectiveConfig.cycleStartDay || 15,
       rubrics: settings.companySettings?.rubrics,
       companyConfig: settings.companySettings?.config,
+      normalEntries: normals,
       overtimeBuckets: calc.overtimeBuckets,
       discountBuckets: calc.discountBuckets,
     });

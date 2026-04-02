@@ -19,6 +19,7 @@ import {
   resolveDailyShortfallMinutes,
   resolveDailyJourneyMinutes,
   resolveExpectedStartMinutes,
+  summarizeNightWorkedMinutes,
   sumEntryWorkedMinutes,
   timeToMinutes
 } from './timeMath';
@@ -67,6 +68,7 @@ export interface CompanyCalculationConfig {
   percentNight?: number;
   cycleStartDay?: number;
   roundingCarryover?: number;
+  customHolidays?: string[];
   overtimeRules?: CompanyOvertimeRule[];
   dailyOvertimeDiscountRules?: CompanyDailyOvertimeDiscountRule[];
 }
@@ -313,6 +315,7 @@ export {
   resolveDailyOvertimeDiscountMinutes,
   resolveDailyJourneyMinutes,
   resolveExpectedStartMinutes,
+  summarizeNightWorkedMinutes,
   sumEntryWorkedMinutes,
   timeToMinutes
 };

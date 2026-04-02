@@ -1,63 +1,92 @@
-import type { CompanyCalculationConfig, CompanyRubricKey, CompanyRubricMap, Settings } from './calculations';
+import {
+  normalizeOvernightEntries,
+  summarizeNightWorkedMinutes,
+  timeToMinutes,
+  type CompanyCalculationConfig,
+  type CompanyRubricKey,
+  type CompanyRubricMap,
+  type Settings,
+  type TimeEntry,
+} from './calculations';
+import { NIGHT_END_MINUTES } from './timeMath';
 
 // ---------------------------------------------------------
 //  FERIADOS FIXOS DO BRASIL
 // ---------------------------------------------------------
-const FERIADOS_FIXOS = [
-  "01-01", "04-21", "05-01", "09-07",
-  "10-12", "11-02", "11-15", "12-25"
+const FERIADOS_NACIONAIS_FIXOS = [
+  '01-01', '04-21', '05-01', '09-07',
+  '10-12', '11-02', '11-15', '11-20', '12-25',
 ];
 
 // ---------------------------------------------------------
 //  CÁLCULO DA PÁSCOA – ALGORITMO DE GAUSS
 // ---------------------------------------------------------
-function calcularPascoa(ano: number): Date {
-  const a = ano % 19;
-  const b = Math.floor(ano / 100);
-  const c = ano % 100;
-  const d = Math.floor(b / 4);
-  const e = b % 4;
-  const f = Math.floor((b + 8) / 25);
-  const g = Math.floor((b - f + 1) / 3);
-  const h = (19 * a + b - d - g + 15) % 30;
-  const i = Math.floor(c / 4);
-  const k = c % 4;
-  const l = (32 + 2 * e + 2 * i - h - k) % 7;
-  const m = Math.floor((a + 11 * h + 22 * l) / 451);
-  const mes = Math.floor((h + l - 7 * m + 114) / 31);
-  const dia = ((h + l - 7 * m + 114) % 31) + 1;
-  return new Date(ano, mes - 1, dia);
+function normalizeHolidayToken(value: string): string | null {
+  const normalized = String(value || '').trim();
+  if (/^\d{2}-\d{2}$/.test(normalized)) return normalized;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return normalized;
+  return null;
 }
 
 // ---------------------------------------------------------
 //  FERIADOS MÓVEIS (CARNAVAL, SEXTA SANTA, CORPUS CHRISTI)
 // ---------------------------------------------------------
-function gerarFeriadosMoveis(ano: number): string[] {
-  const pascoa = calcularPascoa(ano);
+function resolveHolidayMatchers(customHolidays: string[] = []) {
+  const monthDayHolidays = new Set(FERIADOS_NACIONAIS_FIXOS);
+  const exactDateHolidays = new Set<string>();
 
-  const carnavalSeg = new Date(pascoa);
-  carnavalSeg.setDate(pascoa.getDate() - 48);
+  for (const rawHoliday of customHolidays) {
+    const normalized = normalizeHolidayToken(rawHoliday);
+    if (!normalized) continue;
+    if (normalized.length === 5) monthDayHolidays.add(normalized);
+    else exactDateHolidays.add(normalized);
+  }
 
-  const carnavalTer = new Date(pascoa);
-  carnavalTer.setDate(pascoa.getDate() - 47);
+  return { monthDayHolidays, exactDateHolidays };
+}
 
-  const sextaSanta = new Date(pascoa);
-  sextaSanta.setDate(pascoa.getDate() - 2);
+export function getDiasBaseDsrMensal(
+  mes: number,
+  ano: number,
+  customHolidays: string[] = []
+) {
+  const startDate = new Date(ano, mes - 1, 1);
+  const endDate = new Date(ano, mes, 0);
+  let diasBase = 0;
+  let descansos = 0;
+  const feriadosConsiderados = new Set<string>();
+  const { monthDayHolidays, exactDateHolidays } = resolveHolidayMatchers(customHolidays);
 
-  const corpusChristi = new Date(pascoa);
-  corpusChristi.setDate(pascoa.getDate() + 60);
+  const current = new Date(startDate);
+  while (current <= endDate) {
+    const isoDate = current.toISOString().slice(0, 10);
+    const mesDia = isoDate.slice(5, 10);
+    const isFeriado = monthDayHolidays.has(mesDia) || exactDateHolidays.has(isoDate);
+    const isDomingo = current.getDay() === 0;
 
-  const format = (d: Date) => d.toISOString().slice(5, 10);
+    if (isFeriado || isDomingo) descansos++;
+    else diasBase++;
+    if (isFeriado) feriadosConsiderados.add(isoDate);
 
-  return [ format(carnavalSeg), format(carnavalTer), format(sextaSanta), format(corpusChristi) ];
+    current.setDate(current.getDate() + 1);
+  }
+
+  return {
+    diasBase,
+    descansos,
+    feriados: Array.from(feriadosConsiderados).sort(),
+  };
 }
 
 // ---------------------------------------------------------
 //  DIAS ÚTEIS E DOMINGOS/FERIADOS
 // ---------------------------------------------------------
-export function getDiasUteisEDomingos(mes: number, ano: number, cycleStartDay: number = 1) {
-  const feriadosAnoCorrente = [...FERIADOS_FIXOS, ...gerarFeriadosMoveis(ano)];
-  const feriadosAnoAnterior = [...FERIADOS_FIXOS, ...gerarFeriadosMoveis(ano - 1)];
+export function getDiasUteisEDomingos(
+  mes: number,
+  ano: number,
+  cycleStartDay: number = 1,
+  customHolidays: string[] = []
+) {
 
   let startDate: Date;
   let endDate: Date;
@@ -75,25 +104,30 @@ export function getDiasUteisEDomingos(mes: number, ano: number, cycleStartDay: n
 
   let diasUteis = 0;
   let domingosEFeriados = 0;
+  const feriadosConsiderados = new Set<string>();
+  const { monthDayHolidays, exactDateHolidays } = resolveHolidayMatchers(customHolidays);
 
   const current = new Date(startDate);
   while (current <= endDate) {
     const diaSemana = current.getDay(); // 0 domingo, 6 sábado
-    const mesDia = current.toISOString().slice(5, 10);
-    const anoRef = current.getFullYear();
-    const feriados = anoRef === ano ? feriadosAnoCorrente : feriadosAnoAnterior;
-    
-    const isFeriado = feriados.includes(mesDia);
+    const isoDate = current.toISOString().slice(0, 10);
+    const mesDia = isoDate.slice(5, 10);
+    const isFeriado = monthDayHolidays.has(mesDia) || exactDateHolidays.has(isoDate);
     const isDomingo = diaSemana === 0;
     const isSabado = diaSemana === 6;
 
     if (isFeriado || isDomingo) domingosEFeriados++;
     else if (!isSabado) diasUteis++;
+    if (isFeriado) feriadosConsiderados.add(isoDate);
 
     current.setDate(current.getDate() + 1);
   }
 
-  return { diasUteis, domingosEFeriados, feriados: feriadosAnoCorrente };
+  return {
+    diasUteis,
+    domingosEFeriados,
+    feriados: Array.from(feriadosConsiderados).sort(),
+  };
 }
 
 // ---------------------------------------------------------
@@ -124,6 +158,7 @@ export interface PayrollParams {
   cycleStartDay?: number;
   rubrics?: Partial<CompanyRubricMap>;
   companyConfig?: Partial<CompanyCalculationConfig>;
+  normalEntries?: TimeEntry[];
   roundingCarryover?: number;
   overtimeBuckets?: Array<{
     rubricKey: string;
@@ -191,10 +226,16 @@ function buildEffectiveRubrics(rubrics?: Partial<CompanyRubricMap>): CompanyRubr
 function buildEffectiveCompanyConfig(companyConfig: Partial<CompanyCalculationConfig>, legacy?: Partial<Settings>) {
   return {
     cycleStartDay: Number(companyConfig.cycleStartDay ?? legacy?.cycleStartDay ?? 1),
+    nightCutoff: String(companyConfig.nightCutoff ?? legacy?.nightCutoff ?? '22:00'),
     percent50: Number(companyConfig.percent50 ?? legacy?.percent50 ?? 0),
     percent100: Number(companyConfig.percent100 ?? legacy?.percent100 ?? 0),
     percentNight: Number(companyConfig.percentNight ?? legacy?.percentNight ?? 0),
     roundingCarryover: Number(companyConfig.roundingCarryover ?? 0),
+    customHolidays: Array.isArray(companyConfig.customHolidays)
+      ? companyConfig.customHolidays
+        .map((holiday) => normalizeHolidayToken(String(holiday || '')))
+        .filter((holiday): holiday is string => !!holiday)
+      : [],
   };
 }
 
@@ -217,6 +258,7 @@ export function calcularHoleriteCompleto({
   cycleStartDay = 1,
   rubrics = {},
   companyConfig = {},
+  normalEntries = [],
   roundingCarryover = 0
   ,
   overtimeBuckets = [],
@@ -225,6 +267,7 @@ export function calcularHoleriteCompleto({
   const effectiveRubrics = buildEffectiveRubrics(rubrics);
   const effectiveConfig = buildEffectiveCompanyConfig(companyConfig, {
     cycleStartDay,
+    nightCutoff: companyConfig.nightCutoff,
     percent50: perc50,
     percent100: perc100,
     percentNight: percNight,
@@ -235,7 +278,17 @@ export function calcularHoleriteCompleto({
   const effectivePercent100 = effectiveConfig.percent100;
   const previousRoundingCarryover = Math.max(0, Number(effectiveConfig.roundingCarryover ?? roundingCarryover ?? 0));
   // 1) Dias úteis e domingos/feriados
-  const { diasUteis, domingosEFeriados, feriados } = getDiasUteisEDomingos(mes, ano, effectiveCycleStartDay);
+  const { diasUteis, domingosEFeriados, feriados } = getDiasUteisEDomingos(
+    mes,
+    ano,
+    effectiveCycleStartDay,
+    effectiveConfig.customHolidays
+  );
+  const {
+    diasBase: diasBaseDsr,
+    descansos: descansosDsr,
+    feriados: feriadosDsr,
+  } = getDiasBaseDsrMensal(mes, ano, effectiveConfig.customHolidays);
 
   // 2) Valor hora
   const valorHora = salarioBase / (horasMensais || 1);
@@ -254,33 +307,33 @@ export function calcularHoleriteCompleto({
   const v100 = he100 * rate100;
   const v125 = he125 * rate125;
   const hasDynamicBuckets = overtimeBuckets.length > 0;
-  const additionalNightFactor = 1 + effectivePercentNight / 100;
-  const adicionalNoturnoDinamico = overtimeBuckets.reduce((sum, bucket) => {
-    if (bucket.period !== 'night') return sum;
-    if (effectivePercentNight <= 0) return sum;
-    const baseAmount = (bucket.minutes / 60) * valorHora * (bucket.multiplier / additionalNightFactor);
-    return sum + Math.max(0, bucket.amount - baseAmount);
-  }, 0);
-  const adicionalNoturno = hasDynamicBuckets
-    ? adicionalNoturnoDinamico
-    : (he75 * (rate75 - rate50)) + (he125 * (rate125 - rate100));
+  const totalHorasExtras = hasDynamicBuckets
+    ? overtimeBuckets.reduce((sum, bucket) => sum + bucket.amount, 0)
+    : v50 + v75 + v100 + v125;
+  const baseHorasExtrasParaDsr = hasDynamicBuckets
+    ? overtimeBuckets
+        .filter((bucket) => bucket.rubricKey !== 'INTERJORNADA')
+        .reduce((sum, bucket) => sum + bucket.amount, 0)
+    : v50 + v75 + v100 + v125;
 
-  const totalHorasExtrasDiurnas = hasDynamicBuckets
-    ? overtimeBuckets.filter((bucket) => bucket.period !== 'night').reduce((sum, bucket) => sum + bucket.amount, 0)
-    : v50 + v100;
-  const totalHorasExtrasNoturnas = hasDynamicBuckets
-    ? overtimeBuckets.filter((bucket) => bucket.period === 'night').reduce((sum, bucket) => sum + bucket.amount, 0)
-    : v75 + v125;
-  const totalHorasExtras = totalHorasExtrasDiurnas + totalHorasExtrasNoturnas;
+  const normalizedNormalEntries = normalizeOvernightEntries(
+    (normalEntries || []).filter((entry) => !entry?.isOvertimeCard)
+  );
+  const normalNightSummary = summarizeNightWorkedMinutes(
+    normalizedNormalEntries,
+    timeToMinutes(effectiveConfig.nightCutoff || '22:00'),
+    NIGHT_END_MINUTES
+  );
+  const adicionalNoturno = (normalNightSummary.financialMinutes / 60) * valorHora * (effectivePercentNight / 100);
 
   // 4) DSR sobre horas extras
-  const dsrSobreHeDiurna = diasUteis > 0 ? (totalHorasExtrasDiurnas / diasUteis) * domingosEFeriados : 0;
-  const dsrSobreHeNoturna = diasUteis > 0 ? (totalHorasExtrasNoturnas / diasUteis) * domingosEFeriados : 0;
-  const valorDSR = dsrSobreHeDiurna + dsrSobreHeNoturna;
+  const dsrSobreHorasExtras = diasBaseDsr > 0 ? (baseHorasExtrasParaDsr / diasBaseDsr) * descansosDsr : 0;
+  const dsrSobreAdicionalNoturno = diasBaseDsr > 0 ? (adicionalNoturno / diasBaseDsr) * descansosDsr : 0;
+  const valorDSR = dsrSobreHorasExtras + dsrSobreAdicionalNoturno;
   const descontoDSRAtraso = diasUteis > 0 ? (atraso / diasUteis) * domingosEFeriados : 0;
 
   // 5) Total proventos
-  const totalProventos = salarioBase + totalHorasExtras + valorDSR;
+  const totalProventos = salarioBase + totalHorasExtras + adicionalNoturno + valorDSR;
 
   // 6) INSS progressivo (faixas oficiais de 2026)
   const INSS_FAIXAS_2026 = [
@@ -395,9 +448,9 @@ export function calcularHoleriteCompleto({
   const lines: PayrollLine[] = [
     { code: effectiveRubrics.SALARIO_FIXO.code, description: effectiveRubrics.SALARIO_FIXO.label, reference: horasMensais, amount: Number(salarioBase.toFixed(2)) },
     ...overtimeLines,
-    { code: effectiveRubrics.ADIC_NOT.code, description: effectiveRubrics.ADIC_NOT.label, reference: hasDynamicBuckets ? Number((overtimeBuckets.filter((bucket) => bucket.period === 'night').reduce((sum, bucket) => sum + bucket.minutes, 0) / 60).toFixed(2)) : Number((he75 + he125).toFixed(2)), amount: Number(adicionalNoturno.toFixed(2)) },
-    { code: effectiveRubrics.DSR_HE.code, description: effectiveRubrics.DSR_HE.label, reference: null, amount: Number(dsrSobreHeDiurna.toFixed(2)) },
-    { code: effectiveRubrics.DSR_NOT.code, description: effectiveRubrics.DSR_NOT.label, reference: null, amount: Number(dsrSobreHeNoturna.toFixed(2)) },
+    { code: effectiveRubrics.ADIC_NOT.code, description: effectiveRubrics.ADIC_NOT.label, reference: Number((normalNightSummary.financialMinutes / 60).toFixed(2)), amount: Number(adicionalNoturno.toFixed(2)) },
+    { code: effectiveRubrics.DSR_HE.code, description: effectiveRubrics.DSR_HE.label, reference: Number((dsrSobreHorasExtras / (valorHora || 1)).toFixed(2)), amount: Number(dsrSobreHorasExtras.toFixed(2)) },
+    { code: effectiveRubrics.DSR_NOT.code, description: effectiveRubrics.DSR_NOT.label, reference: Number((dsrSobreAdicionalNoturno / (valorHora || 1)).toFixed(2)), amount: Number(dsrSobreAdicionalNoturno.toFixed(2)) },
     ...discountBuckets.map((bucket) => {
       const rubric = effectiveRubrics[bucket.rubricKey] || { code: bucket.code || '', label: bucket.label || bucket.rubricKey };
       return {
@@ -417,13 +470,23 @@ export function calcularHoleriteCompleto({
     diasUteis,
     domingosEFeriados,
     feriadosConsiderados: feriados,
+    diasBaseDsr,
+    descansosDsr,
+    feriadosDsrConsiderados: feriadosDsr,
     lines,
     valores: {
       salarioBase: Number(salarioBase.toFixed(2)),
       valorHora: Number(valorHora.toFixed(2)),
       totalHorasExtras: Number(totalHorasExtras.toFixed(2)),
-      dsrSobreHeDiurna: Number(dsrSobreHeDiurna.toFixed(2)),
-      dsrSobreHeNoturna: Number(dsrSobreHeNoturna.toFixed(2)),
+      baseHorasExtrasParaDsr: Number(baseHorasExtrasParaDsr.toFixed(2)),
+      adicionalNoturno: Number(adicionalNoturno.toFixed(2)),
+      adicionalNoturnoHoras: Number((normalNightSummary.financialMinutes / 60).toFixed(2)),
+      dsrSobreHorasExtras: Number(dsrSobreHorasExtras.toFixed(2)),
+      dsrSobreAdicionalNoturno: Number(dsrSobreAdicionalNoturno.toFixed(2)),
+      dsrSobreHeDiurna: Number(dsrSobreHorasExtras.toFixed(2)),
+      dsrSobreHeNoturna: Number(dsrSobreAdicionalNoturno.toFixed(2)),
+      diasBaseDsr,
+      descansosDsr,
       valorDSR: Number(valorDSR.toFixed(2)),
       totalProventos: Number(totalProventos.toFixed(2)),
 

@@ -48,6 +48,9 @@ function cloneCompanySettings(settings: Settings, company?: CompanySettingsProfi
     rubrics: { ...suggestedRubrics, ...((company?.rubrics || {}) as CompanyRubricMap) },
     config: {
       ...(company?.config || {}),
+      customHolidays: Array.isArray(company?.config?.customHolidays)
+        ? company.config.customHolidays.map((holiday) => String(holiday))
+        : [],
       overtimeRules: Array.isArray(company?.config?.overtimeRules)
         ? company.config.overtimeRules.map((rule) => ({ ...rule }))
         : suggestedRules,
@@ -221,6 +224,22 @@ export default function SettingsView({ settings, onSave }: Props) {
     if (legacyField) {
       setLocalSettings((prev) => ({ ...prev, [legacyField]: value }));
     }
+  }, [updateCompanySettings]);
+
+  const handleHolidayListChange = React.useCallback((value: string) => {
+    const customHolidays = Array.from(new Set(
+      value
+        .split(/[\r\n,;]+/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+    ));
+    updateCompanySettings((current) => ({
+      ...current,
+      config: {
+        ...current.config,
+        customHolidays,
+      },
+    }));
   }, [updateCompanySettings]);
 
   const handleRubricChange = React.useCallback((rubricKey: string, field: 'code' | 'label', value: string) => {
@@ -696,6 +715,19 @@ export default function SettingsView({ settings, onSave }: Props) {
                   <label className="text-xs font-bold uppercase text-zinc-500">Inicio adicional noturno</label>
                   <input type="text" value={companySettings.config.nightCutoff ?? localSettings.nightCutoff ?? ''} onChange={(e) => handleCompanyConfigChange('nightCutoff', e.target.value)} className="w-full rounded-lg border border-zinc-200 px-3 py-2 text-sm" placeholder="Ex: 22:00" />
                 </div>
+              </div>
+
+              <div className="space-y-3 rounded-[2rem] border border-zinc-100 bg-zinc-50/50 p-6">
+                <div>
+                  <h3 className="text-sm font-black uppercase tracking-tight text-zinc-900">Feriados do DSR</h3>
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">Use MM-DD ou YYYY-MM-DD. Ponto facultativo nao deve entrar aqui.</p>
+                </div>
+                <textarea
+                  value={(companySettings.config.customHolidays || []).join('\n')}
+                  onChange={(e) => handleHolidayListChange(e.target.value)}
+                  className="min-h-28 w-full rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                  placeholder={'01-25\n07-09\n2026-04-03'}
+                />
               </div>
 
               <div className="space-y-4 rounded-[2rem] border border-zinc-100 bg-zinc-50/50 p-6">

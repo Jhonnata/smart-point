@@ -4,7 +4,6 @@ import { Calculator, Loader2, Save, WandSparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import type { Settings, TimeEntry } from '../lib/calculations';
 import { resolveEffectiveCalculationConfig, resolveWorkDateByCompetenciaDay, timeToMinutes } from '../lib/calculations';
-import { apiFetch } from '../lib/api';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { getSimulatorPlan, saveSimulatorPlan } from '../lib/supabaseData';
 import { formatCurrency, cn } from '../lib/utils';
@@ -300,15 +299,13 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
     let cancelled = false;
     const loadPlan = async () => {
       if (!reference) return;
+      if (!isSupabaseConfigured) {
+        setIsPlanLoading(false);
+        return;
+      }
       setIsPlanLoading(true);
       try {
-        const data = isSupabaseConfigured
-          ? await getSimulatorPlan(reference)
-          : await (async () => {
-              const res = await apiFetch(`/api/simulator-plan/${reference}`);
-              if (!res.ok) return { plan: null };
-              return await res.json();
-            })();
+        const data = await getSimulatorPlan(reference);
         const plan = (data?.plan || null) as SavedPlanPayload | null;
         if (!plan || cancelled) return;
         if (typeof plan.targetValueInput === 'string') setTargetValueInput(plan.targetValueInput);
@@ -590,6 +587,10 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
       toast.error('Referencia invalida para salvar o planejamento.');
       return;
     }
+    if (!isSupabaseConfigured) {
+      toast.error('Supabase nao configurado. O planejamento usa apenas Supabase.');
+      return;
+    }
     const payload: SavedPlanPayload = {
       version: 3,
       targetValueInput,
@@ -603,19 +604,7 @@ export default function OvertimeSimulator({ entries, settings, month }: Props) {
     };
     setIsPlanSaving(true);
     try {
-      if (isSupabaseConfigured) {
-        await saveSimulatorPlan(reference, payload);
-      } else {
-        const res = await apiFetch(`/api/simulator-plan/${reference}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data?.error || `Erro ao salvar planejamento (${res.status})`);
-        }
-      }
+      await saveSimulatorPlan(reference, payload);
       toast.success('Planejamento salvo com sucesso.');
     } catch (err: any) {
       console.error('Failed to save simulator plan', err);

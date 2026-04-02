@@ -54,6 +54,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
     if (!entries || entries.length === 0 || !settings) return null;
     try {
       const effectiveEntries = normalizeOvernightEntries(entries);
+      const effectiveNormalEntries = normalizeOvernightEntries(normalEntries ?? effectiveEntries.filter((entry) => !entry.isOvertimeCard));
       // 1) Calcula horas extras base (jornada, domingo, adicional noturno)
       const res = calculateOvertime(effectiveEntries, settings);
       if (!res) return null;
@@ -148,6 +149,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
         cycleStartDay: effectiveConfig.cycleStartDay || 15,
         rubrics: settings.companySettings?.rubrics,
         companyConfig: settings.companySettings?.config,
+        normalEntries: effectiveNormalEntries,
         overtimeBuckets: res.overtimeBuckets,
         discountBuckets: res.discountBuckets,
       });
@@ -157,7 +159,7 @@ export default function SummaryView({ entries, normalEntries, overtimeEntries, s
       console.error("Error in Summary calculations", err);
       return null;
     }
-  }, [entries, settings, month, effectiveConfig]);
+  }, [entries, normalEntries, settings, month, effectiveConfig]);
 
   const bancoHorasHours = React.useMemo(() => {
     if (!results) return '0h00';

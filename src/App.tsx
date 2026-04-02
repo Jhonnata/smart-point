@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   Settings as SettingsIcon, 
@@ -123,8 +123,16 @@ export default function App() {
   });
   const [forgotPasswordState, setForgotPasswordState] = useState<ForgotPasswordResponse | null>(null);
   const apiUnavailable = React.useMemo(() => isApiUnavailableInCurrentHost(), []);
-  const useSupabaseData = React.useMemo(() => isSupabaseConfigured, []);
-  const useSupabaseAuth = useSupabaseData;
+  const useSupabaseData = true;
+  const useSupabaseAuth = true;
+  const supabaseReady = React.useMemo(() => isSupabaseConfigured && !!supabase, []);
+  const supabaseRequiredMessage = 'Supabase nao configurado. Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY.';
+
+  const ensureSupabaseReady = React.useCallback(() => {
+    if (!supabaseReady) {
+      throw new Error(supabaseRequiredMessage);
+    }
+  }, [supabaseReady, supabaseRequiredMessage]);
 
   const normalizeAuthUser = React.useCallback((raw: any): AuthUser | null => {
     if (!raw || typeof raw !== 'object') return null;
@@ -281,22 +289,14 @@ export default function App() {
   }, [buildEntriesFromReference]);
 
   const fetchReferenceByMonth = React.useCallback(async (monthKey: string) => {
+    ensureSupabaseReady();
     const ref = refFromMonthKey(monthKey);
-    if (useSupabaseData) {
-      return await getReference(ref);
-    }
-    const res = await apiFetch(`/api/referencia/${ref}`);
-    if (!res.ok) return null;
-    return await res.json();
-  }, [refFromMonthKey, useSupabaseData]);
+    return await getReference(ref);
+  }, [ensureSupabaseReady, refFromMonthKey]);
 
   const refreshHolerithsAndCache = React.useCallback(async (focusMonth?: string) => {
-    const holData = useSupabaseData
-      ? await listHoleriths()
-      : await (async () => {
-          const holRes = await apiFetch('/api/holeriths');
-          return holRes.ok ? await holRes.json() as any[] : [];
-        })();
+    ensureSupabaseReady();
+    const holData = await listHoleriths();
     const months = [...new Set((holData || []).map(monthKeyFromHolerith))].sort().reverse();
 
     const refPairs = await Promise.all(months.map(async (monthKey) => {
@@ -320,7 +320,7 @@ export default function App() {
     if (nextSelected !== selectedMonth) {
       setSelectedMonth(nextSelected);
     }
-  }, [fetchReferenceByMonth, monthKeyFromHolerith, rebuildEntriesFromCache, selectedMonth, useSupabaseData]);
+  }, [ensureSupabaseReady, fetchReferenceByMonth, monthKeyFromHolerith, rebuildEntriesFromCache, selectedMonth]);
 
   useEffect(() => {
     if (!selectedMonth) {
@@ -419,7 +419,14 @@ export default function App() {
     let cancelled = false;
     const bootstrapAuth = async () => {
       setAuthLoading(true);
-      if (useSupabaseAuth && supabase) {
+      if (!supabaseReady || !supabase) {
+        if (!cancelled) {
+          setAuthUser(null);
+          setAuthLoading(false);
+        }
+        return;
+      }
+      if (useSupabaseAuth) {
         try {
           const { data } = await supabase.auth.getUser();
           if (!cancelled) {
@@ -442,39 +449,13 @@ export default function App() {
         }
         return;
       }
-
-      if (apiUnavailable) {
-        if (!cancelled) {
-          setAuthUser(null);
-          setAuthLoading(false);
-        }
-        return;
-      }
-      try {
-        const res = await apiFetch('/api/auth/me');
-        if (!res.ok) {
-          clearStoredAuthToken();
-          if (!cancelled) setAuthUser(null);
-          return;
-        }
-        const data = await res.json();
-        if (!cancelled) {
-          setAuthUser(normalizeAuthUser(data?.user));
-        }
-      } catch (err) {
-        console.error('Error checking session:', err);
-        clearStoredAuthToken();
-        if (!cancelled) setAuthUser(null);
-      } finally {
-        if (!cancelled) setAuthLoading(false);
-      }
     };
     bootstrapAuth();
     return () => { cancelled = true; };
-  }, [normalizeAuthUser, apiUnavailable, useSupabaseAuth]);
+  }, [supabaseReady, useSupabaseAuth]);
 
   useEffect(() => {
-    if (!useSupabaseAuth || !supabase) return;
+    if (!useSupabaseAuth || !supabaseReady || !supabase) return;
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       const user = session?.user;
       setAuthUser(user ? {
@@ -489,7 +470,7 @@ export default function App() {
     });
 
     return () => listener.subscription.unsubscribe();
-  }, [useSupabaseAuth]);
+  }, [supabaseReady, useSupabaseAuth]);
 
   useEffect(() => {
     if (authLoading) return;
@@ -616,8 +597,8 @@ export default function App() {
   }, [settings, currentMetadata]);
 
   const submitAuth = async (mode: AuthMode) => {
-    if (apiUnavailable && !useSupabaseAuth) {
-      toast.error('API nao configurada. Defina VITE_API_BASE_URL para o backend.');
+    if (!supabaseReady || !supabase) {
+      toast.error(supabaseRequiredMessage);
       return;
     }
     const email = authForm.email.trim().toLowerCase();
@@ -718,8 +699,8 @@ export default function App() {
   };
 
   const requestPasswordReset = async () => {
-    if (apiUnavailable && !useSupabaseAuth) {
-      toast.error('API nao configurada. Defina VITE_API_BASE_URL para o backend.');
+    if (!supabaseReady || !supabase) {
+      toast.error(supabaseRequiredMessage);
       return;
     }
     const email = authForm.email.trim().toLowerCase();
@@ -771,8 +752,8 @@ export default function App() {
   };
 
   const resetPassword = async () => {
-    if (apiUnavailable && !useSupabaseAuth) {
-      toast.error('API nao configurada. Defina VITE_API_BASE_URL para o backend.');
+    if (!supabaseReady || !supabase) {
+      toast.error(supabaseRequiredMessage);
       return;
     }
     const password = authForm.password;
@@ -868,6 +849,7 @@ export default function App() {
   const fetchData = async () => {
     setIsLoading(true);
     try {
+      ensureSupabaseReady();
       if (useSupabaseData) {
         const [settingsData] = await Promise.all([
           getSettings(),
@@ -897,6 +879,7 @@ export default function App() {
 
   const saveSettings = async (newSettings: Settings) => {
     try {
+      ensureSupabaseReady();
       if (useSupabaseData) {
         await saveSupabaseSettings(newSettings);
         setSettings(newSettings);
@@ -948,23 +931,9 @@ export default function App() {
     const ref = `${safePayload.month}${safePayload.year}`;
     console.log(`Saving card via POST /api/referencia/${ref}`);
     try {
-      let skippedInvalidDates = 0;
-      if (useSupabaseData) {
-        const result = await saveReference(ref, safePayload);
-        skippedInvalidDates = Number(result?.skippedInvalidDates || 0);
-      } else {
-        const res = await apiFetch(`/api/referencia/${ref}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(safePayload)
-        });
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || `HTTP error! status: ${res.status}`);
-        }
-        const data = await res.json();
-        console.log('Save response:', data);
-      }
+      ensureSupabaseReady();
+      const result = await saveReference(ref, safePayload);
+      const skippedInvalidDates = Number(result?.skippedInvalidDates || 0);
 
       const monthKey = `${safePayload.year}-${safePayload.month}`;
       await refreshHolerithsAndCache(monthKey);
@@ -975,11 +944,7 @@ export default function App() {
         return next;
       });
 
-      const mData = useSupabaseData ? await getReference(ref) : await (async () => {
-        const mRes = await apiFetch(`/api/referencia/${ref}`);
-        if (!mRes.ok) return null;
-        return await mRes.json();
-      })();
+      const mData = await getReference(ref);
       if (mData) {
         setMonthData(mData);
         setMonthCache(prev => ({ ...prev, [monthKey]: mData }));
@@ -1065,15 +1030,7 @@ export default function App() {
       const currentUpdateMode: CardSaveMode = pendingCardSaveMode || 'merge';
       if (currentUpdateMode === 'replace') {
         const ref = `${String(refMonth).padStart(2, '0')}${refYear}`;
-        if (useSupabaseData) {
-          await deleteReference(ref, 'all');
-        } else {
-          const delRes = await apiFetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
-          if (!delRes.ok && delRes.status !== 404) {
-            const delErr = await delRes.json().catch(() => ({}));
-            throw new Error(delErr.error || `Falha ao limpar competencia para substituicao (${delRes.status}).`);
-          }
-        }
+        await deleteReference(ref, 'all');
       }
 
       await saveCard({
@@ -1097,13 +1054,7 @@ export default function App() {
         onClick: async () => {
           try {
             console.log('Calling DELETE /api/referencias');
-            const data = useSupabaseData
-              ? await clearReferences()
-              : await (async () => {
-                  const res = await apiFetch('/api/referencias', { method: 'DELETE' });
-                  if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-                  return await res.json();
-                })();
+            const data = await clearReferences();
             console.log('Clear data response:', data);
             setEntries([]);
             setHoleriths([]);
@@ -1138,13 +1089,7 @@ export default function App() {
             const [year, mm] = month.split('-');
             const ref = `${mm}${year}`;
             console.log(`Calling DELETE /api/referencia/${ref}?type=all`);
-            const data = useSupabaseData
-              ? await deleteReference(ref, 'all')
-              : await (async () => {
-                  const res = await apiFetch(`/api/referencia/${ref}?type=all`, { method: 'DELETE' });
-                  if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-                  return await res.json();
-                })();
+            const data = await deleteReference(ref, 'all');
             console.log('Delete response:', data);
 
             await refreshHolerithsAndCache();
@@ -1285,7 +1230,7 @@ export default function App() {
 
             <button
               type="submit"
-              disabled={authSubmitting || (apiUnavailable && !useSupabaseAuth)}
+              disabled={authSubmitting || !supabaseReady}
               className="w-full mt-2 rounded-xl bg-zinc-900 text-white py-3 font-bold disabled:opacity-60 flex items-center justify-center gap-2"
             >
               {authMode === 'login' && <LogIn className="w-4 h-4" />}
@@ -1344,9 +1289,9 @@ export default function App() {
               )}
             </div>
           )}
-          {apiUnavailable && !useSupabaseAuth && (
+          {!supabaseReady && (
             <p className="mt-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
-              GitHub Pages publica apenas frontend estatico. Configure VITE_API_BASE_URL para um backend com as rotas /api.
+              Configure `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` para carregar e salvar dados do sistema.
             </p>
           )}
           <p className="mt-4 text-xs text-zinc-500">
@@ -1828,7 +1773,7 @@ export default function App() {
                   return;
                 }
 
-                // Auto-preencher Configurações do Usuário a partir do cabeçalho do cartão (se vazio)
+                // Auto-preencher ConfiguraÃ§Ãµes do UsuÃ¡rio a partir do cabeÃ§alho do cartÃ£o (se vazio)
                 if (settings && metadata) {
                   const fillableKeys: (keyof Settings)[] = ['employeeName','employeeCode','role','location','companyName','companyCnpj','cardNumber'];
                   const toFill: Partial<Settings> = {};
@@ -1841,15 +1786,7 @@ export default function App() {
                   }
                   if (Object.keys(toFill).length > 0) {
                     const updatedSettings = { ...settings, ...toFill } as Settings;
-                    if (useSupabaseData) {
-                      await saveSupabaseSettings(updatedSettings);
-                    } else {
-                      await apiFetch('/api/settings', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(updatedSettings)
-                      });
-                    }
+                    await saveSupabaseSettings(updatedSettings);
                     setSettings(updatedSettings);
                   }
                 }
@@ -1897,7 +1834,7 @@ export default function App() {
                     toast.warning(`${normalizedDateCount} data(s) do OCR foram normalizadas para a competência ${referenceKey}.`);
                 }
                 
-                // Buscar dados existentes do mês para preservar o outro tipo de cartão
+                // Buscar dados existentes do mÃªs para preservar o outro tipo de cartÃ£o
                 const existingMonthData = useSupabaseData
                   ? await getReference(`${refMonth}${refYear}`)
                   : await (async () => {
@@ -1934,7 +1871,7 @@ export default function App() {
                   return out;
                 };
 
-                // Cartão atual (processado pela IA); o outro tipo é preservado do banco
+                // CartÃ£o atual (processado pela IA); o outro tipo Ã© preservado do banco
                 const timeFields: Array<'entry1' | 'exit1' | 'entry2' | 'exit2' | 'entryExtra' | 'exitExtra'> = [
                   'entry1', 'exit1', 'entry2', 'exit2', 'entryExtra', 'exitExtra'
                 ];
@@ -2057,6 +1994,7 @@ export default function App() {
     </div>
   );
 }
+
 
 
 

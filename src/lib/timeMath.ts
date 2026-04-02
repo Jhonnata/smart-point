@@ -160,6 +160,11 @@ export interface WorkedMinuteSlice {
   financialMinutes: number;
 }
 
+export interface NightWorkSummary {
+  realMinutes: number;
+  financialMinutes: number;
+}
+
 export function getWorkedMinuteSlices(
   entry: PunchEntryLike,
   nightStartMinutes: number = NIGHT_START_MINUTES,
@@ -197,6 +202,28 @@ export function getWorkedMinuteSlices(
   }
 
   return slices;
+}
+
+export function summarizeNightWorkedMinutes(
+  entries: PunchEntryLike[],
+  nightStartMinutes: number = NIGHT_START_MINUTES,
+  nightEndMinutes: number = NIGHT_END_MINUTES
+): NightWorkSummary {
+  let realMinutes = 0;
+  let financialMinutes = 0;
+
+  for (const entry of entries || []) {
+    for (const slice of getWorkedMinuteSlices(entry, nightStartMinutes, nightEndMinutes)) {
+      if (!slice.isNight) continue;
+      realMinutes += 1;
+      financialMinutes += slice.financialMinutes;
+    }
+  }
+
+  return {
+    realMinutes,
+    financialMinutes: Number(financialMinutes.toFixed(4)),
+  };
 }
 
 export function getFirstEntryMinutes(entry: PunchEntryLike): number | null {

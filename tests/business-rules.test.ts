@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildSuggestedCompanyRubrics,
   calculateOvertime,
   convertNightRealMinutesToFinancial,
   resolveDelayMinutes,
@@ -11,7 +12,7 @@ import {
   type TimeEntry,
 } from '../src/lib/calculations.ts';
 import { buildProjectedCardFromHolerith } from '../src/lib/holerithProjection.ts';
-import { calcularHoleriteCompleto } from '../src/lib/payroll.ts';
+import { calcularHoleriteCompleto, getDiasBaseDsrMensal, getDiasUteisEDomingos } from '../src/lib/payroll.ts';
 
 function createSettings(overrides: Partial<Settings> = {}): Settings {
   return {
@@ -397,6 +398,35 @@ test('hora noturna reduzida converte minutos reais em financeiros', () => {
   assert.ok(Math.abs(convertNightRealMinutesToFinancial(60) - 68.5714285714) < 0.0001);
 });
 
+test('DSR usa apenas feriados configurados e nao trata carnaval como feriado automatico', () => {
+  const semFeriadoMunicipal = getDiasUteisEDomingos(3, 2026, 16);
+  assert.equal(semFeriadoMunicipal.diasUteis, 20);
+  assert.equal(semFeriadoMunicipal.domingosEFeriados, 4);
+  assert.deepEqual(semFeriadoMunicipal.feriados, []);
+
+  const comFeriadoConfigurado = getDiasUteisEDomingos(3, 2026, 16, ['2026-03-09']);
+  assert.equal(comFeriadoConfigurado.diasUteis, 19);
+  assert.equal(comFeriadoConfigurado.domingosEFeriados, 5);
+  assert.deepEqual(comFeriadoConfigurado.feriados, ['2026-03-09']);
+});
+
+test('base mensal de DSR usa calendario do mes para os fatores dos holerites pagos', () => {
+  const dezembro = getDiasBaseDsrMensal(12, 2025);
+  assert.equal(dezembro.diasBase, 26);
+  assert.equal(dezembro.descansos, 5);
+  assert.deepEqual(dezembro.feriados, ['2025-12-25']);
+
+  const janeiro = getDiasBaseDsrMensal(1, 2026);
+  assert.equal(janeiro.diasBase, 26);
+  assert.equal(janeiro.descansos, 5);
+  assert.deepEqual(janeiro.feriados, ['2026-01-01']);
+
+  const fevereiro = getDiasBaseDsrMensal(2, 2026);
+  assert.equal(fevereiro.diasBase, 24);
+  assert.equal(fevereiro.descansos, 4);
+  assert.deepEqual(fevereiro.feriados, []);
+});
+
 test('interjornada inferior a 11 horas gera bucket de indenizacao', () => {
   const settings = createSettings({ saturdayCompensation: false });
   const result = calculateOvertime([
@@ -420,4 +450,163 @@ test('interjornada inferior a 11 horas gera bucket de indenizacao', () => {
   const interjornada = result.overtimeBuckets.find((bucket) => bucket.rubricKey === 'INTERJORNADA');
   assert.ok(interjornada);
   assert.equal(interjornada?.minutes, 120);
+});
+
+test('holerite separa DSR de HE do DSR de adicional noturno do cartao normal', () => {
+  const rubrics = buildSuggestedCompanyRubrics();
+  const settings = createSettings({
+    baseSalary: 2200,
+    monthlyHours: 220,
+    cycleStartDay: 1,
+    saturdayCompensation: false,
+    compDays: '',
+    companySettings: {
+      cnpj: '00000000000000',
+      name: 'Empresa Teste',
+      rubrics,
+      config: {
+        cycleStartDay: 1,
+        nightCutoff: '22:00',
+        percent50: 50,
+        percent100: 100,
+        percentNight: 25,
+      },
+    },
+  });
+
+  const normalEntries = [
+    createEntry({
+      id: 'normal-night',
+      date: '2026-03-02',
+      start: '22:00',
+      end: '23:00',
+      isOvertimeCard: false,
+    }),
+  ];
+  const overtimeEntries = [
+    createEntry({
+      id: 'extra-night',
+      date: '2026-03-03',
+      start: '22:00',
+      end: '23:00',
+      isOvertimeCard: true,
+    }),
+  ];
+
+  const overtime = calculateOvertime(overtimeEntries, settings);
+  assert.ok(overtime);
+
+  const payroll = calcularHoleriteCompleto({
+    salarioBase: settings.baseSalary,
+    horasMensais: settings.monthlyHours,
+    he50: overtime.grandTotal50,
+    he75: overtime.grandTotal75,
+    he100: overtime.grandTotal100,
+    he125: overtime.grandTotal125,
+    perc50: settings.percent50,
+    perc100: settings.percent100,
+    percNight: settings.percentNight,
+    mes: 3,
+    ano: 2026,
+    cycleStartDay: 1,
+    rubrics,
+    companyConfig: settings.companySettings?.config,
+    normalEntries,
+    overtimeBuckets: overtime.overtimeBuckets,
+    discountBuckets: overtime.discountBuckets,
+  });
+
+  const adicNot = payroll.lines.find((line) => line.code === rubrics.ADIC_NOT.code);
+  const dsrHe = payroll.lines.find((line) => line.code === rubrics.DSR_HE.code);
+  const dsrNot = payroll.lines.find((line) => line.code === rubrics.DSR_NOT.code);
+
+  assert.ok(adicNot);
+  assert.ok(dsrHe);
+  assert.ok(dsrNot);
+
+  const valorHora = settings.baseSalary / settings.monthlyHours;
+  const expectedNightHours = Number((convertNightRealMinutesToFinancial(60) / 60).toFixed(2));
+  const exactAdicNot = ((convertNightRealMinutesToFinancial(60) / 60) * valorHora) * 0.25;
+  const expectedAdicNot = Number(exactAdicNot.toFixed(2));
+  const { diasBase, descansos } = getDiasBaseDsrMensal(3, 2026);
+  const expectedDsrHe = Number(((overtime.grandTotalValue / diasBase) * descansos).toFixed(2));
+  const exactDsrNot = (exactAdicNot / diasBase) * descansos;
+  const expectedDsrNot = Number(exactDsrNot.toFixed(2));
+
+  assert.equal(adicNot?.reference, expectedNightHours);
+  assert.equal(adicNot?.amount, expectedAdicNot);
+  assert.equal(dsrHe?.amount, expectedDsrHe);
+  assert.equal(dsrHe?.reference, Number((expectedDsrHe / valorHora).toFixed(2)));
+  assert.equal(dsrNot?.amount, expectedDsrNot);
+  assert.equal(dsrNot?.reference, Number((exactDsrNot / valorHora).toFixed(2)));
+});
+
+test('3948 usa base financeira mensal das HEs nos holerites pagos de 12-2025 a 02-2026', () => {
+  const baseParams = {
+    salarioBase: 9251.05,
+    horasMensais: 220,
+    he50: 0,
+    he75: 0,
+    he100: 0,
+    he125: 0,
+    perc50: 50,
+    perc100: 100,
+    percNight: 25,
+  };
+  const createBucket = (rubricKey: string, amount: number, referenceHours: number) => ({
+    rubricKey,
+    code: rubricKey,
+    label: rubricKey,
+    multiplier: 0,
+    period: 'any' as const,
+    minutes: Math.round(referenceHours * 60),
+    amount,
+  });
+
+  const dezembro = calcularHoleriteCompleto({
+    ...baseParams,
+    mes: 12,
+    ano: 2025,
+    overtimeBuckets: [
+      createBucket('HE_50', 567.68, 9.0),
+      createBucket('HE_75', 237.16, 3.0),
+      createBucket('HE_100', 1118.54, 13.3),
+      createBucket('HE_125', 633.91, 6.03),
+    ],
+  });
+  assert.equal(dezembro.diasBaseDsr, 26);
+  assert.equal(dezembro.descansosDsr, 5);
+  assert.ok(Math.abs(dezembro.valores.dsrSobreHorasExtras - 491.99) < 0.25);
+  assert.ok(Math.abs((dezembro.lines.find((line) => line.description === 'DSR sobre HE')?.reference as number) - 11.7) < 0.02);
+
+  const janeiro = calcularHoleriteCompleto({
+    ...baseParams,
+    mes: 1,
+    ano: 2026,
+    overtimeBuckets: [
+      createBucket('HE_50', 189.23, 3.0),
+      createBucket('HE_75', 124.91, 1.58),
+      createBucket('HE_100', 708.13, 8.42),
+    ],
+  });
+  assert.equal(janeiro.diasBaseDsr, 26);
+  assert.equal(janeiro.descansosDsr, 5);
+  assert.ok(Math.abs(janeiro.valores.dsrSobreHorasExtras - 196.37) < 0.25);
+  assert.ok(Math.abs((janeiro.lines.find((line) => line.description === 'DSR sobre HE')?.reference as number) - 4.67) < 0.02);
+
+  const fevereiro = calcularHoleriteCompleto({
+    ...baseParams,
+    mes: 2,
+    ano: 2026,
+    overtimeBuckets: [
+      createBucket('HE_50', 567.68, 9.0),
+      createBucket('HE_75', 474.33, 6.0),
+      createBucket('HE_100', 1862.83, 22.15),
+      createBucket('HE_125', 1393.97, 13.26),
+    ],
+  });
+  assert.equal(fevereiro.diasBaseDsr, 24);
+  assert.equal(fevereiro.descansosDsr, 4);
+  assert.ok(Math.abs(fevereiro.valores.dsrSobreHorasExtras - 716.54) < 0.25);
+  assert.ok(Math.abs((fevereiro.lines.find((line) => line.description === 'DSR sobre HE')?.reference as number) - 17.04) < 0.02);
 });
