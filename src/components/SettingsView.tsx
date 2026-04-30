@@ -452,9 +452,65 @@ export default function SettingsView({ settings, onSave }: Props) {
               <select value={localSettings.aiProvider || 'gemini'} onChange={(e) => handleChange('aiProvider', e.target.value as any)} className="w-full rounded-xl border border-zinc-200 px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500">
                 <option value="gemini">Google Gemini</option>
                 <option value="openai">OpenAI</option>
+                <option value="llamaindex">LlamaIndex (LlamaParse)</option>
+                <option value="claude">Anthropic Claude</option>
+                <option value="groq">Groq (Llama 3 Vision)</option>
+                <option value="pollinations">IA Gratuita (Pollinations)</option>
                 <option value="codex">Codex / Proxy</option>
               </select>
             </div>
+
+            {localSettings.aiProvider === 'llamaindex' && (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-zinc-700">Chave LlamaIndex</label>
+                  <input type="password" value={localSettings.llamaindexApiKey || ''} onChange={(e) => handleChange('llamaindexApiKey', e.target.value)} className="w-full rounded-xl border border-zinc-200 px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-zinc-700">Tier LlamaParse</label>
+                  <select value={localSettings.llamaindexTier || 'agentic'} onChange={(e) => handleChange('llamaindexTier', e.target.value)} className="w-full rounded-xl border border-zinc-200 px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500">
+                    <option value="fast">Fast</option>
+                    <option value="cost_effective">Cost Effective</option>
+                    <option value="agentic">Agentic</option>
+                    <option value="agentic_plus">Agentic Plus</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {localSettings.aiProvider === 'pollinations' && (
+              <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-4 space-y-4">
+                <div className="flex gap-3">
+                  <div className="rounded-full bg-emerald-100 p-2 h-fit">
+                    <Bot className="w-4 h-4 text-emerald-600" />
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-bold text-emerald-900">IA Gratuita Ativada</h4>
+                    <p className="text-xs text-emerald-700 leading-relaxed">
+                      Esta opcao utiliza o provedor Pollinations.ai, que permite o processamento de imagens e texto sem a necessidade de chaves de API. Ideal para testes rapidos ou uso ocasional.
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <label className="text-sm font-semibold text-zinc-700">Modelo</label>
+                    <select 
+                      value={localSettings.pollinationsModel || 'openai'} 
+                      onChange={(e) => handleChange('pollinationsModel', e.target.value)} 
+                      className="w-full rounded-xl border border-zinc-200 bg-white px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                    >
+                      <option value="openai">OpenAI Vision (Default)</option>
+                      <option value="mistral">Mistral Large</option>
+                      <option value="claude-hybridspace">Claude (Hybrid)</option>
+                      <option value="p1">Pollinations P1</option>
+                    </select>
+                  </div>
+                  <div className="flex flex-col justify-end pb-1">
+                    <span className="text-[10px] font-medium text-zinc-400 uppercase tracking-wider">Status: Sem autenticacao necessaria</span>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {localSettings.aiProvider === 'gemini' && (
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -503,6 +559,39 @@ export default function SettingsView({ settings, onSave }: Props) {
                         <option value="gpt-4-turbo">GPT-4 Turbo</option>
                       </>
                     )}
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {localSettings.aiProvider === 'claude' && (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-zinc-700">Chave Anthropic Claude</label>
+                  <input type="password" value={localSettings.claudeApiKey || ''} onChange={(e) => handleChange('claudeApiKey', e.target.value)} className="w-full rounded-xl border border-zinc-200 px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-zinc-700">Modelo Claude</label>
+                  <select value={localSettings.claudeModel || 'claude-3-5-sonnet-20240620'} onChange={(e) => handleChange('claudeModel', e.target.value)} className="w-full rounded-xl border border-zinc-200 px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500">
+                    <option value="claude-3-5-sonnet-20240620">Claude 3.5 Sonnet</option>
+                    <option value="claude-3-opus-20240229">Claude 3 Opus</option>
+                    <option value="claude-3-haiku-20240307">Claude 3 Haiku</option>
+                  </select>
+                </div>
+              </div>
+            )}
+
+            {localSettings.aiProvider === 'groq' && (
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-zinc-700">Chave Groq</label>
+                  <input type="password" value={localSettings.groqApiKey || ''} onChange={(e) => handleChange('groqApiKey', e.target.value)} className="w-full rounded-xl border border-zinc-200 px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500" />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold text-zinc-700">Modelo Vision (Groq)</label>
+                  <select value={localSettings.groqModel || 'llama-3.2-11b-vision-preview'} onChange={(e) => handleChange('groqModel', e.target.value)} className="w-full rounded-xl border border-zinc-200 px-4 py-2 outline-none focus:ring-2 focus:ring-emerald-500">
+                    <option value="llama-3.2-11b-vision-preview">Llama 3.2 11B Vision</option>
+                    <option value="llama-3.2-90b-vision-preview">Llama 3.2 90B Vision</option>
                   </select>
                 </div>
               </div>

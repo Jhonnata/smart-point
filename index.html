@@ -4,8 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Smart Point</title>
+    <!-- OpenCV.js 4.x para Visão Computacional -->
+    <script async src="https://docs.opencv.org/4.10.0/opencv.js" type="text/javascript"></script>
   </head>
   <body>
+    <script>
+      // Polyfill para bibliotecas que dependem de 'Module' global (Emscripten/OpenCV)
+      window.Module = {
+        onRuntimeInitialized: function() {
+          console.log('OpenCV.js WASM Runtime initialized!');
+          window.cvLoaded = true;
+        }
+      };
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

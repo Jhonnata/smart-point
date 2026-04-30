@@ -90,6 +90,27 @@ function readResetTokenFromHash(): string {
   return String(params.get('token') || '').trim();
 }
 
+function readSupabaseRecoveryFromHash(): { accessToken: string; refreshToken: string; type: string } | null {
+  if (typeof window === 'undefined') return null;
+  const hash = String(window.location.hash || '');
+  if (!hash.startsWith('#')) return null;
+  const raw = hash.slice(1);
+  if (!raw || raw.startsWith('dashboard') || raw.startsWith('resumo') || raw.startsWith('holerith') || raw.startsWith('card') || raw.startsWith('card-list') || raw.startsWith('upload') || raw.startsWith('settings')) {
+    return null;
+  }
+  const params = new URLSearchParams(raw);
+  const accessToken = String(params.get('access_token') || '').trim();
+  const refreshToken = String(params.get('refresh_token') || '').trim();
+  const type = String(params.get('type') || '').trim().toLowerCase();
+  if (!accessToken) return null;
+  return { accessToken, refreshToken, type };
+}
+
+function hasSupabaseRecoveryHash(): boolean {
+  const recovery = readSupabaseRecoveryFromHash();
+  return !!recovery && recovery.type === 'recovery';
+}
+
 export default function App() {
   const [view, setView] = useState<View>(() => {
     const hash = window.location.hash.replace('#', '') as View;
@@ -383,9 +404,12 @@ export default function App() {
   useEffect(() => {
     const syncResetTokenFromHash = () => {
       const token = readResetTokenFromHash();
-      if (!token) return;
+      const hasRecovery = hasSupabaseRecoveryHash();
+      if (!token && !hasRecovery) return;
       setAuthMode('reset');
-      setAuthForm((prev) => ({ ...prev, resetToken: token }));
+      if (token) {
+        setAuthForm((prev) => ({ ...prev, resetToken: token }));
+      }
     };
 
     syncResetTokenFromHash();
@@ -494,6 +518,7 @@ export default function App() {
   }, [monthCache, monthsFromHoleriths, rebuildEntriesFromCache]);
 
   useEffect(() => {
+    if (hasSupabaseRecoveryHash()) return;
     window.location.hash = view;
   }, [view]);
 
@@ -775,6 +800,23 @@ export default function App() {
     setAuthSubmitting(true);
     try {
       if (useSupabaseAuth && supabase) {
+        let { data: sessionData } = await supabase.auth.getSession();
+        if (!sessionData?.session) {
+          const recovery = readSupabaseRecoveryFromHash();
+          if (recovery?.accessToken && recovery?.refreshToken) {
+            const { error: setSessionError } = await supabase.auth.setSession({
+              access_token: recovery.accessToken,
+              refresh_token: recovery.refreshToken,
+            });
+            if (setSessionError) throw setSessionError;
+            const nextSession = await supabase.auth.getSession();
+            sessionData = nextSession.data;
+          }
+        }
+        if (!sessionData?.session) {
+          throw new Error('Auth session missing! Abra novamente o link de recuperacao e tente de novo.');
+        }
+
         const { error } = await supabase.auth.updateUser({ password });
         if (error) throw error;
         setForgotPasswordState(null);
@@ -785,8 +827,13 @@ export default function App() {
           confirmPassword: '',
           resetToken: '',
         }));
-        if (typeof window !== 'undefined' && isSupabasePasswordRecoveryMode()) {
-          window.history.replaceState({}, document.title, window.location.pathname);
+        if (typeof window !== 'undefined') {
+          if (isSupabasePasswordRecoveryMode()) {
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+          if (window.location.hash.includes('access_token=')) {
+            window.history.replaceState({}, document.title, window.location.pathname + window.location.search);
+          }
         }
         toast.success('Senha redefinida. Faça login com a nova senha.');
         return;
@@ -1407,27 +1454,16 @@ export default function App() {
       {/* Sidebar */}
       <aside className={cn("hidden md:flex md:relative bg-white border-r border-zinc-100 flex-col transition-[width] duration-200", isSidebarCollapsed ? "md:w-24" : "md:w-60")}>
         <div className={cn("hidden md:block", isSidebarCollapsed ? "p-4" : "p-6")}>
-          <div className={cn("mb-6 flex items-center", isSidebarCollapsed ? "justify-center" : "gap-3")}>
+          <div 
+            className={cn("mb-6 flex items-center cursor-pointer hover:opacity-80 transition-opacity", isSidebarCollapsed ? "justify-center" : "gap-3")}
+            onClick={() => setIsSidebarCollapsed((v) => !v)}
+            title={isSidebarCollapsed ? "Expandir menu" : "Recolher menu"}
+          >
             <div className="w-10 h-10 bg-zinc-900 rounded-xl flex items-center justify-center shadow-lg shadow-zinc-200 shrink-0">
               <PlusCircle className="w-6 h-6 text-white" />
             </div>
             {!isSidebarCollapsed && <span className="font-black text-2xl tracking-tighter">PontoSmart</span>}
           </div>
-          <button
-            type="button"
-            onClick={() => setIsSidebarCollapsed((v) => !v)}
-            className={cn(
-              "group relative flex h-11 items-center justify-center overflow-hidden rounded-2xl border border-zinc-200/80 bg-white text-zinc-500 shadow-sm transition-all hover:-translate-y-0.5 hover:border-zinc-300 hover:text-zinc-900 hover:shadow-md",
-              isSidebarCollapsed ? "mx-auto w-11" : "w-11"
-            )}
-            title={isSidebarCollapsed ? "Expandir menu" : "Recolher menu"}
-            aria-label={isSidebarCollapsed ? "Expandir menu lateral" : "Recolher menu lateral"}
-          >
-            <div className="absolute inset-0 bg-gradient-to-br from-zinc-100 via-white to-zinc-50 opacity-0 transition-opacity group-hover:opacity-100" />
-            <div className="relative flex items-center justify-center">
-              {isSidebarCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-            </div>
-          </button>
         </div>
 
         <nav className={cn("flex-1 space-y-2", isSidebarCollapsed ? "px-3" : "px-4")}>
@@ -1524,10 +1560,19 @@ export default function App() {
           )}
         </div>
 
-        {(isLoading || isMonthLoading) && (
+        {isLoading && (
+          <div className="fixed inset-0 bg-white/80 backdrop-blur-sm z-50 flex items-center justify-center">
+            <div className="flex flex-col items-center gap-4">
+              <Loader2 className="w-10 h-10 animate-spin text-zinc-900" />
+              <p className="font-bold text-zinc-900">Carregando PontoSmart...</p>
+            </div>
+          </div>
+        )}
+
+        {(isMonthLoading) && (
           <div className="mb-6 flex items-center gap-3 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm font-semibold text-zinc-700 shadow-sm">
             <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />
-            {isLoading ? 'Carregando dados do Supabase...' : 'Buscando competência selecionada...'}
+            Buscando competência selecionada...
           </div>
         )}
 
@@ -1572,9 +1617,9 @@ export default function App() {
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.2 }}
           >
-            {view === 'dashboard' && <DashboardView entries={entries} settings={settings!} />}
+            {view === 'dashboard' && settings && <DashboardView entries={entries} settings={settings} />}
             {view === 'resumo' && (
-              filteredEntries.length > 0 
+              filteredEntries.length > 0 && settings
                 ? <SummaryView
                     entries={filteredEntries}
                     normalEntries={monthHoursEntries}
@@ -1602,7 +1647,7 @@ export default function App() {
                   </div>
             )}
             {view === 'holerith' && (
-              filteredEntries.length > 0
+              filteredEntries.length > 0 && settings
                 ? <HolerithView
                     entries={filteredEntries}
                     normalEntries={monthHoursEntries}
@@ -1635,7 +1680,7 @@ export default function App() {
                 onDeleteMonth={deleteMonth}
               />
             )}
-            {view === 'card' && <DualCardView 
+            {view === 'card' && settings && <DualCardView 
               entries={filteredEntries} 
               month={selectedMonth}
               settings={effectiveMonthSettings!}
@@ -1647,8 +1692,8 @@ export default function App() {
                 setView('upload');
               }}
             />}
-            {view === 'upload' && <UploadView 
-              settings={settings!} 
+            {view === 'upload' && settings && <UploadView 
+              settings={settings} 
               availableMonths={availableMonths}
               existingEntries={entries}
               initialMonth={uploadContext?.month}

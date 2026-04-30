@@ -1,4 +1,5 @@
 ﻿import {GoogleGenAI, Type} from "@google/genai";
+import LlamaCloud from "@llamaindex/llama-cloud";
 import type {Settings} from "../lib/calculations";
 
 export interface TimeEntry {
@@ -43,6 +44,7 @@ export interface PontoData {
     isOvertimeCard?: boolean;
     frontImage?: string;
     backImage?: string;
+    rawOutput?: string; // Adicionado para depuração
 }
 
 const SYSTEM_PROMPT = `Voce e um extrator de dados de cartao de ponto brasileiro.
@@ -365,6 +367,55 @@ function normalizeImageForOpenAI(image: string): string {
     return `data:image/jpeg;base64,${raw}`;
 }
 
+function dataUrlToFile(image: string, index: number): File {
+    const raw = String(image || '').trim();
+    if (!raw.startsWith('data:')) {
+        throw new Error('Formato de imagem invalido para LlamaIndex. Use data URL.');
+    }
+    const match = raw.match(/^data:(.*?);base64,(.*)$/);
+    if (!match) {
+        throw new Error('Imagem data URL invalida para LlamaIndex.');
+    }
+    const mimeType = match[1] || 'image/jpeg';
+    const base64 = match[2] || '';
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const ext = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
+    return new File([bytes], `cartao-${index + 1}.${ext}`, {type: mimeType});
+}
+
+function extractFirstJsonObject(content: string): string {
+    const text = String(content || '').trim();
+    const start = text.indexOf('{');
+    if (start < 0) throw new Error('Resposta sem objeto JSON.');
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < text.length; i++) {
+        const ch = text[i];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (ch === '\\') {
+            escaped = true;
+            continue;
+        }
+        if (ch === '"') {
+            inString = !inString;
+            continue;
+        }
+        if (inString) continue;
+        if (ch === '{') depth += 1;
+        if (ch === '}') {
+            depth -= 1;
+            if (depth === 0) return text.slice(start, i + 1);
+        }
+    }
+    throw new Error('Nao foi possivel delimitar o JSON retornado.');
+}
+
 async function parseWithGemini(
     images: string[],
     settings: Settings
@@ -437,7 +488,10 @@ async function parseWithGemini(
                     },
                 },
             });
-            return JSON.parse(response.text || "{}") as PontoData;
+            const responseText = response.text || "{}";
+            const parsed = JSON.parse(responseText) as PontoData;
+            parsed.rawOutput = responseText;
+            return parsed;
         } catch (error) {
             if (!isGeminiUnavailableError(error) || attempt === maxAttempts) {
                 throw error;
@@ -502,8 +556,229 @@ async function parseWithOpenAI(
     }
 
     const result = await response.json();
-    const content = result.choices[0]?.message?.content;
-    return JSON.parse(content || "{}") as PontoData;
+    const content = result.choices[0]?.message?.content || "{}";
+    const parsed = JSON.parse(content) as PontoData;
+    parsed.rawOutput = content;
+    return parsed;
+}
+
+async function parseWithClaude(
+    images: string[],
+    settings: Settings
+): Promise<PontoData> {
+    const apiKey = settings.claudeApiKey;
+    const modelName = settings.claudeModel || "claude-3-5-sonnet-20240620";
+
+    if (!apiKey) {
+        throw new Error("Chave de API do Claude nao configurada.");
+    }
+
+    const imageContent = images.map(img => {
+        const mimeType = inferMimeTypeFromUrl(img);
+        const base64Data = img.split(',')[1];
+        return {
+            type: "image",
+            source: {
+                type: "base64",
+                media_type: mimeType,
+                data: base64Data
+            }
+        };
+    });
+
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "x-api-key": apiKey,
+            "anthropic-version": "2023-06-01",
+            "dangerously-allow-browser": "true" // Nota: em produção o ideal é proxy
+        },
+        body: JSON.stringify({
+            model: modelName,
+            max_tokens: 4096,
+            system: `CONTEXTO DO USUARIO: Inicio do Ciclo de Fechamento: Dia ${settings.cycleStartDay || 15}\n\n` + SYSTEM_PROMPT,
+            messages: [
+                {
+                    role: "user",
+                    content: [
+                        ...imageContent,
+                        {
+                            type: "text",
+                            text: "Extract data from these point card images. Return ONLY the JSON object."
+                        }
+                    ]
+                }
+            ]
+        })
+    });
+
+    if (!response.ok) {
+        const error = await response.json();
+        throw new Error(`Claude Error: ${error.error?.message || response.statusText}`);
+    }
+
+    const result = await response.json();
+    const content = result.content[0]?.text || "{}";
+    const cleanJson = content.replace(/```json\n?/, '').replace(/\n?```/, '').trim();
+    const parsed = JSON.parse(cleanJson) as PontoData;
+    parsed.rawOutput = content;
+    return parsed;
+}
+
+async function parseWithGroq(
+    images: string[],
+    settings: Settings
+): Promise<PontoData> {
+    const apiKey = settings.groqApiKey;
+    const modelName = settings.groqModel || "llama-3.2-11b-vision-preview";
+
+    if (!apiKey) {
+        throw new Error("Chave de API do Groq nao configurada.");
+    }
+
+    const imageContent = images.map(img => ({
+        type: "image_url",
+        image_url: {
+            url: img // Groq aceita data URLs diretamente no campo url
+        }
+    }));
+
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model: modelName,
+            messages: [
+                {
+                    role: "system",
+                    content: `CONTEXTO DO USUARIO: Inicio do Ciclo de Fechamento: Dia ${settings.cycleStartDay || 15}\n\n` + SYSTEM_PROMPT
+                },
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: "Extract data from these point card images."
+                        },
+                        ...imageContent
+                    ]
+                }
+            ],
+            response_format: {type: "json_object"}
+        })
+    });
+
+    if (!response.ok) {
+        const error = await response.json();
+        throw new Error(`Groq Error: ${error.error?.message || response.statusText}`);
+    }
+
+    const result = await response.json();
+    const content = result.choices[0]?.message?.content || "{}";
+    const parsed = JSON.parse(content) as PontoData;
+    parsed.rawOutput = content;
+    return parsed;
+}
+
+async function parseWithPollinations(
+    images: string[],
+    settings: Settings
+): Promise<PontoData> {
+    const modelName = settings.pollinationsModel || "openai"; // Pollinations usa 'openai' como alias para visão gpt-4o-like ou similar
+
+    const imageContent = images.map(img => ({
+        type: "image_url",
+        image_url: {
+            url: img
+        }
+    }));
+
+    const response = await fetch("https://text.pollinations.ai/openai/chat/completions", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            model: modelName,
+            messages: [
+                {
+                    role: "system",
+                    content: `CONTEXTO DO USUARIO: Inicio do Ciclo de Fechamento: Dia ${settings.cycleStartDay || 15}\n\n` + SYSTEM_PROMPT
+                },
+                {
+                    role: "user",
+                    content: [
+                        {
+                            type: "text",
+                            text: "Extract data from these point card images."
+                        },
+                        ...imageContent
+                    ]
+                }
+            ],
+            // Pollinations pode não suportar json_object em todos os modelos, mas tentaremos
+            response_format: {type: "json_object"}
+        })
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Pollinations Error: ${response.status} ${errorText}`);
+    }
+
+    const result = await response.json();
+    let content = result.choices[0]?.message?.content || "{}";
+    
+    // Limpeza básica se não vier JSON puro
+    content = content.replace(/```json/g, "").replace(/```/g, "").trim();
+    
+    try {
+        const parsed = JSON.parse(content) as PontoData;
+        parsed.rawOutput = content;
+        return parsed;
+    } catch (e) {
+        console.error("Erro ao fazer parse do JSON do Pollinations:", content);
+        throw new Error("A IA gratuita retornou um formato invalido. Tente novamente.");
+    }
+}
+
+async function parseWithLlamaIndex(
+    images: string[],
+    settings: Settings
+): Promise<PontoData> {
+    const apiKey = settings.llamaindexApiKey || '';
+    if (!apiKey) {
+        throw new Error('Chave de API LlamaIndex nao configurada.');
+    }
+    const tier = settings.llamaindexTier || 'agentic';
+    const client = new LlamaCloud({apiKey});
+    const chunks: string[] = [];
+
+    for (let i = 0; i < images.length; i++) {
+        const uploadFile = dataUrlToFile(images[i], i);
+        const parsed = await client.parsing.parse({
+            upload_file: uploadFile,
+            tier,
+            version: 'latest',
+            expand: ['markdown', 'text'],
+            agentic_options: {
+                custom_prompt: `CONTEXTO DO USUARIO: Inicio do Ciclo de Fechamento: Dia ${settings.cycleStartDay || 15}\n\n${SYSTEM_PROMPT}`,
+            },
+        });
+        const markdownText = parsed?.markdown_full || '';
+        const plainText = parsed?.text_full || '';
+        chunks.push([markdownText, plainText].filter(Boolean).join('\n'));
+    }
+
+    const combined = chunks.join('\n\n');
+    const jsonText = extractFirstJsonObject(combined);
+    const result = JSON.parse(jsonText) as PontoData;
+    result.rawOutput = combined;
+    return result;
 }
 
 type AIProvider = Settings['aiProvider'];
@@ -512,12 +787,18 @@ type ParseStrategy = (images: string[], settings: Settings) => Promise<PontoData
 const parseStrategies: Record<AIProvider, ParseStrategy> = {
     gemini: (images, settings) => parseWithGemini(images, settings),
     openai: (images, settings) => parseWithOpenAI(images, settings, false),
-    codex: (images, settings) => parseWithOpenAI(images, settings, true)
+    llamaindex: (images, settings) => parseWithLlamaIndex(images, settings),
+    codex: (images, settings) => parseWithOpenAI(images, settings, true),
+    claude: (images, settings) => parseWithClaude(images, settings),
+    groq: (images, settings) => parseWithGroq(images, settings),
+    pollinations: (images, settings) => parseWithPollinations(images, settings)
 };
 
 function getGeminiFallbackStrategies(settings: Settings): Array<{ provider: AIProvider; parse: ParseStrategy }> {
     const fallbacks: Array<{ provider: AIProvider; parse: ParseStrategy }> = [];
     if (settings.openaiApiKey) fallbacks.push({provider: 'openai', parse: parseStrategies.openai});
+    if (settings.claudeApiKey) fallbacks.push({provider: 'claude', parse: parseStrategies.claude});
+    if (settings.groqApiKey) fallbacks.push({provider: 'groq', parse: parseStrategies.groq});
     if (settings.codexApiKey) fallbacks.push({provider: 'codex', parse: parseStrategies.codex});
     return fallbacks;
 }

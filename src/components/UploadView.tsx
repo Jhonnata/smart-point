@@ -9,6 +9,7 @@ import type { ParsedHolerithPdfData } from '../lib/holerithPdf';
 
 export type UploadUpdateMode = 'merge' | 'replace';
 type UploadTab = 'digitalizar' | 'manual';
+type OcrMode = 'ai' | 'local';
 
 interface Props {
   onProcessed: (
@@ -117,6 +118,8 @@ export default function UploadView({
   const [frontImage, setFrontImage] = useState<string | null>(null);
   const [backImage, setBackImage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showTestModal, setShowTestModal] = useState(false);
+  const [testResult, setTestResult] = useState<any>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [cameraSide, setCameraSide] = useState<'front' | 'back'>('front');
   const [selectedExistingMonth, setSelectedExistingMonth] = useState<string>(initialMonth);
@@ -145,7 +148,7 @@ export default function UploadView({
     const month = Number(monthStr);
     if (!Number.isFinite(year) || !Number.isFinite(month)) return '';
 
-    const c = Math.max(1, Math.min(31, Number(settings.cycleStartDay || 15)));
+    const c = Math.max(1, Math.min(31, Number(settings?.cycleStartDay || 15)));
     if (c <= 1) return `Competencia ${monthStr}/${year}: 01/${monthStr}/${year} a 31/${monthStr}/${year}`;
 
     let prevMonth = month - 1;
@@ -158,7 +161,7 @@ export default function UploadView({
     const startDay = Math.min(c + 1, 31).toString().padStart(2, '0');
     const endDay = c.toString().padStart(2, '0');
     return `Competencia ${monthStr}/${year}: ${startDay}/${prevMonthStr}/${prevYear} a ${endDay}/${monthStr}/${year}`;
-  }, [settings.cycleStartDay]);
+  }, [settings?.cycleStartDay]);
 
   const digitalCompetenciaHint = React.useMemo(
     () => getCompetenciaPeriodHint(selectedExistingMonth),
@@ -251,15 +254,27 @@ export default function UploadView({
     setTimeout(() => fileInputRef.current?.click(), 0);
   };
 
+  const stopCamera = React.useCallback(() => {
+    const stream = videoRef.current?.srcObject as MediaStream | null;
+    stream?.getTracks().forEach((track) => track.stop());
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsCameraOpen(false);
+  }, []);
+
   const startCamera = async (side: 'front' | 'back') => {
     setCameraSide(side);
     setIsCameraOpen(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-      if (videoRef.current) videoRef.current.srcObject = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(() => undefined);
+      }
     } catch {
       toast.error('Erro ao acessar camera');
-      setIsCameraOpen(false);
+      stopCamera();
     }
   };
 
@@ -275,20 +290,32 @@ export default function UploadView({
     if (cameraSide === 'front') setFrontImage(dataUrl);
     else setBackImage(dataUrl);
 
-    const stream = videoRef.current.srcObject as MediaStream;
-    stream?.getTracks().forEach((track) => track.stop());
-    setIsCameraOpen(false);
+    stopCamera();
   };
 
-  const processImages = async () => {
+  React.useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, [stopCamera]);
+
+  const processImages = async (isTest: boolean = false) => {
     if (!frontImage && !backImage) return;
     setIsProcessing(true);
     try {
-      const imagesToProcess = [frontImage, backImage].filter(Boolean) as string[];
-      const data = await parsePontoImage(imagesToProcess, settings, isOvertimeCard);
+      const data = await parsePontoImage([frontImage, backImage].filter(Boolean) as string[], settings, isOvertimeCard);
+
       if (!data || !Array.isArray(data.entries)) {
         throw new Error('Nenhum dado extraido do cartao.');
       }
+
+      if (isTest) {
+        setTestResult(data);
+        setShowTestModal(true);
+        setIsProcessing(false);
+        return;
+      }
+
       const { entries, ...metadata } = data;
       onProcessed(
         entries,
@@ -603,6 +630,7 @@ export default function UploadView({
             </div>
           )}
 
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             <div className="space-y-4">
               <h3 className="font-bold text-zinc-700 flex items-center gap-2">
@@ -679,23 +707,137 @@ export default function UploadView({
 
           <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileChange} />
 
-          <button
-            disabled={(!frontImage && !backImage) || isProcessing}
-            onClick={processImages}
-            className="w-full py-5 bg-emerald-600 text-white rounded-3xl font-bold text-lg flex items-center justify-center gap-3 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-emerald-200"
-          >
-            {isProcessing ? (
-              <>
-                <Loader2 className="w-6 h-6 animate-spin" />
-                Processando com IA...
-              </>
-            ) : (
-              <>
-                <CheckCircle2 className="w-6 h-6" />
-                Analisar Cartao de Ponto
-              </>
-            )}
-          </button>
+          <div className="flex gap-3 mb-4">
+            <button
+              disabled={(!frontImage && !backImage) || isProcessing}
+              onClick={() => processImages(false)}
+              className="flex-1 py-5 bg-emerald-600 text-white rounded-3xl font-bold text-lg flex items-center justify-center gap-3 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-emerald-200"
+            >
+              {isProcessing ? (
+                <>
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  Processando...
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 className="w-6 h-6" />
+                  Analisar Cartao
+                </>
+              )}
+            </button>
+
+            <button
+              disabled={(!frontImage && !backImage) || isProcessing}
+              onClick={() => processImages(true)}
+              className="px-6 py-5 bg-zinc-800 text-white rounded-3xl font-bold text-lg flex items-center justify-center gap-3 hover:bg-zinc-900 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg shadow-zinc-200"
+              title="Testar extracao de dados"
+            >
+              <Clock className="w-6 h-6" />
+              Testar
+            </button>
+          </div>
+
+          {showTestModal && testResult && (
+            <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+              <div className="bg-white w-full max-w-4xl max-h-[90vh] rounded-3xl overflow-hidden flex flex-col shadow-2xl">
+                <div className="p-6 border-b border-zinc-100 flex justify-between items-center bg-zinc-50">
+                  <div>
+                    <h3 className="text-xl font-bold text-zinc-900">Resultado do Teste de OCR</h3>
+                    <p className="text-sm text-zinc-500">Dados brutos e processados obtidos da imagem</p>
+                  </div>
+                  <button 
+                    onClick={() => setShowTestModal(false)}
+                    className="p-2 hover:bg-zinc-200 rounded-full transition-colors"
+                  >
+                    <Trash2 className="w-6 h-6 text-zinc-400" />
+                  </button>
+                </div>
+                
+                <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                  <div>
+                    <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Logs de Saida Bruta (IA)</h4>
+                    <pre className="bg-zinc-900 text-emerald-400 p-4 rounded-2xl text-xs overflow-x-auto font-mono leading-relaxed whitespace-pre-wrap border border-zinc-800">
+                      {testResult.rawOutput || 'Nenhum log bruto disponivel.'}
+                    </pre>
+                  </div>
+
+                  <div>
+                    <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Dados Estruturados (JSON)</h4>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-100">
+                        <span className="text-[10px] font-bold text-zinc-400 uppercase">Funcionario</span>
+                        <p className="font-bold text-zinc-900">{testResult.employeeName || '-'}</p>
+                      </div>
+                      <div className="bg-zinc-50 p-4 rounded-2xl border border-zinc-100">
+                        <span className="text-[10px] font-bold text-zinc-400 uppercase">Mes/Ano</span>
+                        <p className="font-bold text-zinc-900">{testResult.month}/{testResult.year}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="text-xs font-bold text-zinc-400 uppercase tracking-widest mb-3">Registros Detectados ({testResult.entries?.length || 0})</h4>
+                    <div className="bg-white border border-zinc-100 rounded-2xl overflow-hidden">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-zinc-50 border-b border-zinc-100">
+                          <tr>
+                            <th className="p-3 font-bold text-zinc-500">Data</th>
+                            <th className="p-3 font-bold text-zinc-500">Entrada 1</th>
+                            <th className="p-3 font-bold text-zinc-500">Saida 1</th>
+                            <th className="p-3 font-bold text-zinc-500">Entrada 2</th>
+                            <th className="p-3 font-bold text-zinc-500">Saida 2</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {testResult.entries?.slice(0, 10).map((entry: any, i: number) => (
+                            <tr key={i} className="border-b border-zinc-50 last:border-none">
+                              <td className="p-3 font-medium">{entry.workDate || entry.day}</td>
+                              <td className="p-3 font-mono">{entry.entry1 || '-'}</td>
+                              <td className="p-3 font-mono">{entry.exit1 || '-'}</td>
+                              <td className="p-3 font-mono">{entry.entry2 || '-'}</td>
+                              <td className="p-3 font-mono">{entry.exit2 || '-'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      {testResult.entries?.length > 10 && (
+                        <div className="p-3 text-center text-zinc-400 italic">
+                          Exibindo apenas os 10 primeiros de {testResult.entries.length} registros.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="p-6 bg-zinc-50 border-t border-zinc-100 flex gap-3">
+                  <button
+                    onClick={() => {
+                      setShowTestModal(false);
+                      onProcessed(
+                        testResult.entries,
+                        {
+                          ...testResult,
+                          frontImage: frontImage || undefined,
+                          backImage: backImage || undefined
+                        },
+                        { updateMode }
+                      );
+                    }}
+                    className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-emerald-700 transition-all"
+                  >
+                    <CheckCircle2 className="w-5 h-5" />
+                    Confirmar e Importar Tudo
+                  </button>
+                  <button
+                    onClick={() => setShowTestModal(false)}
+                    className="px-8 py-4 bg-white border border-zinc-200 text-zinc-600 rounded-2xl font-bold hover:bg-zinc-50 transition-all"
+                  >
+                    Fechar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
 
@@ -941,7 +1083,7 @@ export default function UploadView({
         <div className="fixed inset-0 z-[100] bg-black flex flex-col items-center justify-center p-4">
           <video ref={videoRef} autoPlay playsInline className="w-full max-w-2xl rounded-3xl shadow-2xl" />
           <div className="mt-8 flex items-center gap-8">
-            <button onClick={() => setIsCameraOpen(false)} className="p-4 bg-white/10 rounded-full text-white">
+            <button onClick={stopCamera} className="p-4 bg-white/10 rounded-full text-white">
               <Trash2 className="w-6 h-6" />
             </button>
             <button onClick={capturePhoto} className="w-20 h-20 bg-white rounded-full flex items-center justify-center border-4 border-zinc-900" />
